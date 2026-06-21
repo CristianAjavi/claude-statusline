@@ -2,6 +2,17 @@
 # Claude Code statusLine script
 # Input: JSON via stdin from Claude Code
 # Output: single compact line
+#
+# Cross-platform (macOS / Linux / Windows Git-Bash). Requires: jq, git, awk, date.
+
+# ── 0. Locate jq if installed via winget but PATH wasn't refreshed (Windows) ──
+if ! command -v jq >/dev/null 2>&1; then
+  for d in \
+    "$HOME/AppData/Local/Microsoft/WinGet/Links" \
+    "$HOME/AppData/Local/Microsoft/WinGet/Packages"/jqlang.jq_*; do
+    [ -d "$d" ] && PATH="$PATH:$d"
+  done
+fi
 
 input=$(cat)
 
@@ -21,7 +32,7 @@ fi
 ctx_pct=$(printf '%s' "$input" | jq -r '.context_window.used_percentage // empty')
 if [ -n "$ctx_pct" ]; then
   bar_total=10
-  filled=$(printf '%.0f' "$(echo "scale=4; $ctx_pct / $bar_total" | bc)")
+  filled=$(awk -v n="$ctx_pct" -v d="$bar_total" 'BEGIN{printf "%.0f", n/d}')
   [ "$filled" -lt 0 ] 2>/dev/null && filled=0
   [ "$filled" -gt "$bar_total" ] 2>/dev/null && filled=$bar_total
   bar=""
@@ -47,7 +58,7 @@ rl_5h_resets=$(printf '%s' "$input" | jq -r '.rate_limits.five_hour.resets_at //
 rl_5h_str=""
 if [ -n "$rl_5h_pct" ]; then
   bar_total=10
-  filled=$(printf '%.0f' "$(echo "scale=4; $rl_5h_pct / $bar_total" | bc)")
+  filled=$(awk -v n="$rl_5h_pct" -v d="$bar_total" 'BEGIN{printf "%.0f", n/d}')
   [ "$filled" -lt 0 ] 2>/dev/null && filled=0
   [ "$filled" -gt "$bar_total" ] 2>/dev/null && filled=$bar_total
   bar=""
@@ -55,7 +66,8 @@ if [ -n "$rl_5h_pct" ]; then
   while [ $i -lt "$filled" ]; do bar="${bar}█"; i=$(( i + 1 )); done
   while [ $i -lt "$bar_total" ]; do bar="${bar}░"; i=$(( i + 1 )); done
   if [ -n "$rl_5h_resets" ]; then
-    reset_time=$(date -r "$rl_5h_resets" '+%I:%M%p' 2>/dev/null || date -d "@$rl_5h_resets" '+%I:%M%p' 2>/dev/null)
+    # GNU date (Linux/Git-Bash): -d @epoch ; BSD date (macOS): -r epoch
+    reset_time=$(date -d "@$rl_5h_resets" '+%I:%M%p' 2>/dev/null || date -r "$rl_5h_resets" '+%I:%M%p' 2>/dev/null)
     reset_time=$(echo "$reset_time" | tr '[:upper:]' '[:lower:]')
     rl_5h_str=$(printf "5h [%s] %.0f%% ⟳%s" "$bar" "$rl_5h_pct" "$reset_time")
   else
@@ -68,7 +80,7 @@ rl_7d_pct=$(printf '%s' "$input" | jq -r '.rate_limits.seven_day.used_percentage
 rl_7d_str=""
 if [ -n "$rl_7d_pct" ]; then
   bar_total=10
-  filled=$(printf '%.0f' "$(echo "scale=4; $rl_7d_pct / $bar_total" | bc)")
+  filled=$(awk -v n="$rl_7d_pct" -v d="$bar_total" 'BEGIN{printf "%.0f", n/d}')
   [ "$filled" -lt 0 ] 2>/dev/null && filled=0
   [ "$filled" -gt "$bar_total" ] 2>/dev/null && filled=$bar_total
   bar=""
