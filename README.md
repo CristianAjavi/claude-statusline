@@ -3,7 +3,7 @@
 A custom [Claude Code](https://claude.com/claude-code) status line that shows, in one compact bar:
 
 ```
-opus-4-8 | main | ctx [████░░░░░░] 43% | chat $1.23 | 5h [████░░░░░░] 35% ⟳06:00pm | 7d [█░░░░░░░░░] 12%
+opus-4-8 | main | ctx [████░░░░░░] 43% | chat $1.23 | 🕓 6h12m | 5h [████░░░░░░] 35% ⟳06:00pm (2h14m) | 7d [█░░░░░░░░░] 12%
 ```
 
 | Segment | Meaning |
@@ -12,10 +12,30 @@ opus-4-8 | main | ctx [████░░░░░░] 43% | chat $1.23 | 5h [�
 | `main` | Current git branch (only when the cwd is a repo) |
 | `ctx [██░░] 43%` | Context window used |
 | `chat $1.23` | Session cost in USD |
-| `5h [██░░] 35% ⟳06:00pm` | 5-hour rate-limit usage + reset time |
+| `🕓 6h12m` | Total active work time on this machine **today** (see below) |
+| `5h [██░░] 35% ⟳06:00pm (2h14m)` | 5-hour rate-limit usage + reset time + live countdown |
 | `7d [█░░░] 12%` | 7-day rate-limit usage |
 
+The three usage bars are **color-coded by threshold**: green `<60%`, yellow `60–84%`, red `≥85%` — so you can read the state at a glance.
+
 Empty segments are skipped automatically (e.g. branch is hidden outside a repo).
+
+### Daily work-time counter (`🕓`)
+
+A purple counter that accumulates how long you've actually been working on the
+machine **today**, across **all** Claude Code sessions combined.
+
+It works by heartbeat: every time the status line re-renders it stamps a
+timestamp in `~/.claude/worktime/YYYY-MM-DD` and adds the gap since the previous
+heartbeat **only if that gap is under 5 minutes** (`IDLE_LIMIT`). Longer gaps are
+treated as idle and ignored. Because it sums wall-clock gaps (not just API time),
+it naturally includes tool-execution and reading time, and because all sessions
+share one daily file it does **not** double-count parallel windows. The file is
+per-day, so the counter resets automatically each day.
+
+Note: it only counts time while a Claude Code status line is rendering — not your
+whole workday outside Claude. Tune `IDLE_LIMIT` in the script to be more/less
+forgiving about pauses.
 
 ## Requirements
 
