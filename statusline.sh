@@ -104,8 +104,9 @@ if [ -n "$rl_5h_pct" ]; then
   fi
 fi
 
-# ── 6. Rate limits (7d window) ──────────────────────────────────────────────
+# ── 6. Rate limits (7d window) with reset date ──────────────────────────────
 rl_7d_pct=$(printf '%s' "$input" | jq -r '.rate_limits.seven_day.used_percentage // empty')
+rl_7d_resets=$(printf '%s' "$input" | jq -r '.rate_limits.seven_day.resets_at // empty')
 rl_7d_str=""
 if [ -n "$rl_7d_pct" ]; then
   bar_total=10
@@ -117,7 +118,29 @@ if [ -n "$rl_7d_pct" ]; then
   while [ $i -lt "$filled" ]; do bar="${bar}█"; i=$(( i + 1 )); done
   while [ $i -lt "$bar_total" ]; do bar="${bar}░"; i=$(( i + 1 )); done
   c=$(color_for_pct "$rl_7d_pct")
-  rl_7d_str=$(printf "%s7d [%s] %.0f%%%s" "$c" "$bar" "$rl_7d_pct" "$C_RESET")
+  if [ -n "$rl_7d_resets" ]; then
+    # Fecha de reinicio (ej. "jul 08 06:00pm"). GNU date: -d @epoch ; BSD date (macOS): -r epoch
+    reset_date=$(date -d "@$rl_7d_resets" '+%b %d %I:%M%p' 2>/dev/null || date -r "$rl_7d_resets" '+%b %d %I:%M%p' 2>/dev/null)
+    reset_date=$(echo "$reset_date" | tr '[:upper:]' '[:lower:]')
+    # ── Cuenta regresiva: tiempo restante hasta el reinicio (días/horas/min) ──
+    now=$(date +%s)
+    rem=$(( rl_7d_resets - now ))
+    if [ "$rem" -gt 0 ]; then
+      rem_d=$(( rem / 86400 ))
+      rem_h=$(( (rem % 86400) / 3600 ))
+      rem_m=$(( (rem % 3600) / 60 ))
+      if [ "$rem_d" -gt 0 ]; then
+        countdown=$(printf '%dd%02dh' "$rem_d" "$rem_h")
+      else
+        countdown=$(printf '%dh%02dm' "$rem_h" "$rem_m")
+      fi
+    else
+      countdown="0h00m"
+    fi
+    rl_7d_str=$(printf "%s7d [%s] %.0f%% ⟳%s (%s)%s" "$c" "$bar" "$rl_7d_pct" "$reset_date" "$countdown" "$C_RESET")
+  else
+    rl_7d_str=$(printf "%s7d [%s] %.0f%%%s" "$c" "$bar" "$rl_7d_pct" "$C_RESET")
+  fi
 fi
 
 # ── 7. Tiempo total de trabajo en máquina HOY (heartbeat, incluye tools) ─────
