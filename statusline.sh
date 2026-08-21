@@ -16,12 +16,25 @@ fi
 
 input=$(cat)
 
+# ── Ancho del terminal → cuánto pueden medir las barras ─────────────────────
+# La línea de medidores lleva tres barras. Si el terminal es estrecho se parte y
+# entonces no se ve lo que se quería ver. Se estrechan las barras antes que perder
+# información. Si no se puede medir el ancho, se asume estrecho: mejor corto que roto.
+term_cols=$COLUMNS
+[ -z "$term_cols" ] && term_cols=$(tput cols 2>/dev/null)
+[ -z "$term_cols" ] && term_cols=80
+if   [ "$term_cols" -ge 100 ] 2>/dev/null; then bar_total=8
+elif [ "$term_cols" -ge 88 ]  2>/dev/null; then bar_total=6
+else                                            bar_total=4
+fi
+
 # ── Color por umbral (ANSI) ───────────────────────────────────────────────────
 C_RESET=$'\033[0m'
 C_GREEN=$'\033[32m'
 C_YELLOW=$'\033[33m'
 C_RED=$'\033[31m'
 C_PURPLE=$'\033[38;5;135m'   # morado neón (256-color)
+C_CYAN=$'\033[36m'
 # color_for_pct <porcentaje>  →  verde <60, amarillo 60-84, rojo >=85
 color_for_pct() {
   local p=${1%.*}          # quita decimales
@@ -31,6 +44,18 @@ color_for_pct() {
   else                       printf '%s' "$C_GREEN"
   fi
 }
+
+# ── 0.5 Cuenta de la sesión (correo) ─────────────────────────────────────────
+# El JSON del statusLine NO trae el correo (verificado en el bundle 2.1.234),
+# así que se lee de la config de Claude Code: oauthAccount.emailAddress.
+cfg_json="${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json"
+[ -f "$cfg_json" ] || cfg_json="$HOME/.claude.json"
+account_email=""
+[ -f "$cfg_json" ] && account_email=$(jq -r '.oauthAccount.emailAddress // empty' "$cfg_json" 2>/dev/null)
+[ -z "$account_email" ] && [ -n "$ANTHROPIC_API_KEY" ] && account_email="api-key"
+account_user="${account_email%%@*}"   # sin el dominio, para ahorrar espacio
+account_str=""
+[ -n "$account_user" ] && account_str="${C_CYAN}${account_user}${C_RESET}"
 
 # ── 1. Model: strip leading "claude-" prefix ──────────────────────────────────
 model_raw=$(printf '%s' "$input" | jq -r '.model.id // ""')
@@ -44,11 +69,30 @@ if [ -n "$cwd" ]; then
   [ -n "$branch" ] && git_branch="$branch"
 fi
 
+# ── 2.5 Carpeta de trabajo (abreviada) ───────────────────────────────────────
+dir_str=""
+if [ -n "$cwd" ]; then
+  if [ "$cwd" = "$HOME" ]; then
+    dir_str="~"
+  elif [ "${cwd#$HOME/}" != "$cwd" ]; then
+    resto="${cwd#$HOME/}"
+    # dentro de casa: ~/reels-ia, y si anida mucho, ~/…/lotus/motores
+    case "$resto" in
+      */*/*) dir_str="~/…/$(basename "$(dirname "$cwd")")/$(basename "$cwd")" ;;
+      *)     dir_str="~/$resto" ;;
+    esac
+  elif [ ${#cwd} -le 24 ]; then
+    dir_str="$cwd"
+  else
+    padre=$(basename "$(dirname "$cwd")")
+    dir_str="…/${padre:+$padre/}$(basename "$cwd")"
+  fi
+fi
+
 # ── 3. Context window bar ────────────────────────────────────────────────────
 ctx_pct=$(printf '%s' "$input" | jq -r '.context_window.used_percentage // empty')
 if [ -n "$ctx_pct" ]; then
-  bar_total=10
-  filled=$(awk -v n="$ctx_pct" -v d="$bar_total" 'BEGIN{printf "%.0f", n/d}')
+  filled=$(awk -v n="$ctx_pct" -v d="$bar_total" 'BEGIN{printf "%.0f", n*d/100}')
   [ "$filled" -lt 0 ] 2>/dev/null && filled=0
   [ "$filled" -gt "$bar_total" ] 2>/dev/null && filled=$bar_total
   bar=""
@@ -61,21 +105,14 @@ else
   ctx_str=""
 fi
 
-# ── 4. Session cost ──────────────────────────────────────────────────────────
-cost_raw=$(printf '%s' "$input" | jq -r '(.cost.total_cost_usd // (.cost | numbers)) // empty')
-if [ -n "$cost_raw" ]; then
-  cost_str=$(printf 'chat $%.2f' "$cost_raw")
-else
-  cost_str=""
-fi
+# ── 4. Costo de la sesión: retirado a propósito (no se muestra) ──────────────
 
 # ── 5. Rate limits (5h window) with reset time ──────────────────────────────
 rl_5h_pct=$(printf '%s' "$input" | jq -r '.rate_limits.five_hour.used_percentage // empty')
 rl_5h_resets=$(printf '%s' "$input" | jq -r '.rate_limits.five_hour.resets_at // empty')
 rl_5h_str=""
 if [ -n "$rl_5h_pct" ]; then
-  bar_total=10
-  filled=$(awk -v n="$rl_5h_pct" -v d="$bar_total" 'BEGIN{printf "%.0f", n/d}')
+  filled=$(awk -v n="$rl_5h_pct" -v d="$bar_total" 'BEGIN{printf "%.0f", n*d/100}')
   [ "$filled" -lt 0 ] 2>/dev/null && filled=0
   [ "$filled" -gt "$bar_total" ] 2>/dev/null && filled=$bar_total
   bar=""
@@ -97,7 +134,7 @@ if [ -n "$rl_5h_pct" ]; then
       countdown="0h00m"
     fi
     c=$(color_for_pct "$rl_5h_pct")
-    rl_5h_str=$(printf "%s5h [%s] %.0f%% ⟳%s (%s)%s" "$c" "$bar" "$rl_5h_pct" "$reset_time" "$countdown" "$C_RESET")
+    rl_5h_str=$(printf "%s5h [%s] %.0f%% ↻%s%s" "$c" "$bar" "$rl_5h_pct" "$countdown" "$C_RESET")
   else
     c=$(color_for_pct "$rl_5h_pct")
     rl_5h_str=$(printf "%s5h [%s] %.0f%%%s" "$c" "$bar" "$rl_5h_pct" "$C_RESET")
@@ -109,8 +146,7 @@ rl_7d_pct=$(printf '%s' "$input" | jq -r '.rate_limits.seven_day.used_percentage
 rl_7d_resets=$(printf '%s' "$input" | jq -r '.rate_limits.seven_day.resets_at // empty')
 rl_7d_str=""
 if [ -n "$rl_7d_pct" ]; then
-  bar_total=10
-  filled=$(awk -v n="$rl_7d_pct" -v d="$bar_total" 'BEGIN{printf "%.0f", n/d}')
+  filled=$(awk -v n="$rl_7d_pct" -v d="$bar_total" 'BEGIN{printf "%.0f", n*d/100}')
   [ "$filled" -lt 0 ] 2>/dev/null && filled=0
   [ "$filled" -gt "$bar_total" ] 2>/dev/null && filled=$bar_total
   bar=""
@@ -137,7 +173,7 @@ if [ -n "$rl_7d_pct" ]; then
     else
       countdown="0h00m"
     fi
-    rl_7d_str=$(printf "%s7d [%s] %.0f%% ⟳%s (%s)%s" "$c" "$bar" "$rl_7d_pct" "$reset_date" "$countdown" "$C_RESET")
+    rl_7d_str=$(printf "%s7d [%s] %.0f%% ↻%s%s" "$c" "$bar" "$rl_7d_pct" "$countdown" "$C_RESET")
   else
     rl_7d_str=$(printf "%s7d [%s] %.0f%%%s" "$c" "$bar" "$rl_7d_pct" "$C_RESET")
   fi
@@ -168,24 +204,33 @@ day_h=$(( acc / 3600 ))
 day_m=$(( (acc % 3600) / 60 ))
 day_str=$(printf "%s🕓 %dh%02dm%s" "$C_PURPLE" "$day_h" "$day_m" "$C_RESET")
 
-# ── Assemble the line, skipping empty segments ────────────────────────────────
-parts=()
-[ -n "$model_short" ]  && parts+=("$model_short")
-[ -n "$git_branch" ]   && parts+=("$git_branch")
-[ -n "$ctx_str" ]      && parts+=("$ctx_str")
-[ -n "$cost_str" ]     && parts+=("$cost_str")
-[ -n "$day_str" ]      && parts+=("$day_str")
-[ -n "$rl_5h_str" ]    && parts+=("$rl_5h_str")
-[ -n "$rl_7d_str" ]    && parts+=("$rl_7d_str")
 
-# Join with " | "
-result=""
-for part in "${parts[@]}"; do
-  if [ -z "$result" ]; then
-    result="$part"
-  else
-    result="$result | $part"
-  fi
-done
+# ── 7.5 Aviso de registro: RETIRADO ─────────────────────────────────────────
+# Mientras se trabaja, la intervención en curso todavía no está marcada, así que
+# el aviso saltaba siempre: falso positivo estructural. Quien vigila eso es el
+# hook Stop `cierre-tanda.py`, que bloquea el cierre. La barra no repite trabajo.
 
-printf '%s' "$result"
+# ── Ensamblado en DOS líneas ─────────────────────────────────────────────────
+# Línea 1 — dónde estoy: cuenta | carpeta | rama.
+# Línea 2 — con qué y cuánto llevo: modelo | contexto | tiempo del día | ventanas 5h y 7d.
+# El CLI pinta una fila por cada línea que imprime el script (doc oficial).
+unir() {  # une los argumentos no vacíos con " | "
+  local out="" p
+  for p in "$@"; do
+    [ -z "$p" ] && continue
+    if [ -z "$out" ]; then out="$p"; else out="$out | $p"; fi
+  done
+  printf '%s' "$out"
+}
+
+linea1=$(unir "$account_str" "${dir_str:+$C_CYAN$dir_str$C_RESET}" "${git_branch:+$C_YELLOW$git_branch$C_RESET}")
+if [ "$term_cols" -lt 80 ] 2>/dev/null; then
+  # por debajo de 80 columnas no cabe todo: se suelta la ventana de 7 días,
+  # que es la que menos urge, antes que dejar que la línea se parta.
+  linea2=$(unir "$model_short" "$ctx_str" "$day_str" "$rl_5h_str")
+else
+  linea2=$(unir "$model_short" "$ctx_str" "$day_str" "$rl_5h_str" "$rl_7d_str")
+fi
+
+[ -n "$linea1" ] && printf '%s\n' "$linea1"
+printf '%s' "$linea2"
