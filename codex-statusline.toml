@@ -1,0 +1,6 @@
+# Native Codex TUI status line.
+# Copy this setting into the [tui] section of ~/.codex/config.toml, or run:
+#   bash install-codex.sh
+
+[tui]
+status_line = ["model-with-reasoning", "fast-mode", "git-branch", "context-used", "five-hour-limit", "weekly-limit", "used-tokens"]

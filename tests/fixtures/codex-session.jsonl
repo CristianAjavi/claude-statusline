@@ -1,0 +1,1 @@
+{"timestamp":"2026-08-03T15:00:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"total_tokens":1000},"model_context_window":258400},"rate_limits":{"primary":{"used_percent":35.0,"window_minutes":300,"resets_at":4102444800},"secondary":{"used_percent":22.0,"window_minutes":10080,"resets_at":4103049600},"plan_type":"pro"}}}
