@@ -111,13 +111,13 @@ A custom [Claude Code](https://claude.com/claude-code) status line that shows, i
 
 ```
 you@example.com | ~/project | main | ⏳ 3 tasks · 1 running
-opus-4-8 xhi | cpt [████░░░░] 43%·112k | 🕓 6h12m | 5h [███░░░░░] 35% ↻2h14m | 7d [█░░░░░░░] 12%
+opus-4-8 xhigh | cpt [████░░░░] 43%·112k | 🕓 6h12m | 5h [███░░░░░] 35% ↻2h14m | 7d [█░░░░░░░] 12%
 ```
 
 | Segment | Meaning |
 |---------|---------|
 | `opus-4-8` | Active model (the `claude-` prefix is stripped) |
-| `xhi` | **Reasoning effort** in force, colour-coded by what it costs (see below) |
+| `xhigh` | **Reasoning effort** in force, colour-coded by what it costs (see below) |
 | `main` | Current git branch (only when the cwd is a repo) |
 | `cpt [██░░] 43%·112k` | How close the next **auto-compaction** is, and the tokens left before it (see below) |
 | `🕓 6h12m` | Total active work time on this machine **today** (see below) |
@@ -127,21 +127,35 @@ opus-4-8 xhi | cpt [████░░░░] 43%·112k | 🕓 6h12m | 5h [█�
 
 The three usage bars are **color-coded by threshold**: green `<60%`, yellow `60–84%`, red `≥85%` — so you can read the state at a glance.
 
-### Why the reasoning effort is on the bar (`xhi`)
+### Why the reasoning effort is on the bar (`xhigh`)
 
 What a turn costs is not set by the model alone, it is set by the pair **model ×
 effort**. On the same `opus-5`, going from `high` to `xhigh` changes the reasoning
 tokens spent per turn. A bar that names the model and says nothing about the effort
 looks complete and gives you nothing to forecast a run's cost with.
 
+The level is printed with the same name the CLI's own effort picker uses, so what
+you read on the bar is what you picked. The only one shortened is `ultracode`, and only
+because those four extra characters sit on a line already competing with two quota
+windows.
+
 | Shown | Level | Colour |
 |-------|-------|--------|
-| `lo` | `low` | green |
-| `md` | `medium` | green |
-| `hi` | `high` | yellow |
-| `xhi` | `xhigh` | red |
+| `low` | `low` | green |
+| `medium` | `medium` | green |
+| `high` | `high` | yellow |
+| `xhigh` | `xhigh` | red |
 | `max` | `max` | red |
+| `ultra` | `ultracode` | purple |
 | `n/m` | could not be read | red |
+
+`ultracode` is not a sixth level: on bundle `2.1.263` it is a session switch worth
+"`xhigh` plus standing workflow orchestration" — literally `U={ultracode:"xhigh"}` in
+the code. Whether the payload then reports `ultracode` or already reports `xhigh` is
+**not measured** here, since measuring it means turning ultracode on in a live session.
+Both entrances are wired (the literal level and a standalone boolean), and both are
+tested; if it arrives by neither, the bar says `xhigh`, which is the effort actually
+being spent and therefore not a lie.
 
 The value comes from `effort.level` in the status JSON, **already resolved** by the
 CLI. It is deliberately not read from `settings.json`, for two measured reasons:
@@ -155,8 +169,9 @@ CLI. It is deliberately not read from `settings.json`, for two measured reasons:
 
 `settings.json` is used only as a fallback for a CLI old enough not to send the field,
 and there the same precedence is applied (override beats global). A level this script
-has never heard of is not dropped — it is printed truncated, in purple, which is how
-you find out the CLI shipped a new one.
+has never heard of is not dropped and not truncated — it is printed **whole**, in
+purple, which is how you find out the CLI shipped a new one. Truncating it to three
+letters is how this read before, and a half name is easy to mistake for a known one.
 
 If neither source has it, the bar prints `n/m` in red rather than leaving a gap.
 A gap would read as *"no extra effort"*, which is the opposite of *"I could not read

@@ -23,8 +23,17 @@ input=$(cat)
 term_cols=$COLUMNS
 [ -z "$term_cols" ] && term_cols=$(tput cols 2>/dev/null)
 [ -z "$term_cols" ] && term_cols=80
-if   [ "$term_cols" -ge 100 ] 2>/dev/null; then bar_total=8
-elif [ "$term_cols" -ge 88 ]  2>/dev/null; then bar_total=6
+# THRESHOLDS MEASURED, not guessed. The worst reasonable case for this line is level
+# "medium" -- the longest name -- with all three bars at 100 %, i.e. three-digit
+# figures. That case was run against this very script at eight terminal widths, and
+# line 2 measured:
+#   8-wide bars + 7-day window ... 115 columns
+#   4-wide bars + 7-day window ... 103
+#   4-wide bars, no 7-day .......  79
+# Hence the two cuts. The previous ones (100 and 88) date from when the effort was
+# abbreviated to two letters, and were already too generous back then: at 100 columns
+# the line measured 104 and wrapped anyway. The 7-day cut is applied in the assembly.
+if   [ "$term_cols" -ge 115 ] 2>/dev/null; then bar_total=8
 else                                            bar_total=4
 fi
 
@@ -91,17 +100,36 @@ if [ -z "$effort_raw" ]; then
     "${CLAUDE_SETTINGS:-$HOME/.claude/settings.json}" 2>/dev/null)
 fi
 # Colour tracks what it costs, so the expensive levels stand out without reading.
+# ULTRACODE. On bundle 2.1.263 ultracode is not one more level: it is a session
+# switch meaning "xhigh plus standing workflow orchestration" -- literally
+# U={ultracode:"xhigh"} in the code -- so with ultracode on, the payload might say
+# "ultracode" or might already say "xhigh". WHICH ONE IS NOT MEASURED here, because
+# measuring it means turning ultracode on in a live session. Both entrances are
+# wired: the literal level below, and the standalone boolean right after. If it
+# arrives either way it shows; if it arrives neither way the bar says "xhigh", which
+# is the effort actually being spent and therefore not a lie.
 case "$effort_raw" in
-  low)    effort_lbl="lo";    effort_col=$C_GREEN  ;;
-  medium) effort_lbl="md";    effort_col=$C_GREEN  ;;
-  high)   effort_lbl="hi";    effort_col=$C_YELLOW ;;
-  xhigh)  effort_lbl="xhi";   effort_col=$C_RED    ;;
-  max)    effort_lbl="max";   effort_col=$C_RED    ;;
-  "")     effort_lbl="n/m";   effort_col=$C_RED    ;;
-  # A level not on this list is NOT dropped: it is painted truncated and in purple,
-  # which is how you find out the CLI shipped a new one.
-  *)      effort_lbl=$(printf '%.3s' "$effort_raw"); effort_col=$C_PURPLE ;;
+  low)       effort_lbl="low";    effort_col=$C_GREEN  ;;
+  medium)    effort_lbl="medium"; effort_col=$C_GREEN  ;;
+  high)      effort_lbl="high";   effort_col=$C_YELLOW ;;
+  xhigh)     effort_lbl="xhigh";  effort_col=$C_RED    ;;
+  max)       effort_lbl="max";    effort_col=$C_RED    ;;
+  # "ultra", not "ultracode": it is the only name shortened here, and it is
+  # shortened because those four characters sit on a line already competing with
+  # two quota windows.
+  ultracode) effort_lbl="ultra";  effort_col=$C_PURPLE ;;
+  "")        effort_lbl="n/m";    effort_col=$C_RED    ;;
+  # A level not on this list is NOT dropped and NOT truncated: it is painted WHOLE,
+  # in purple. Truncating to three letters is how this read before, and a half name
+  # is easy to mistake for a known one; whole, it reads as "the CLI shipped something".
+  *)         effort_lbl="$effort_raw"; effort_col=$C_PURPLE ;;
 esac
+# Ultracode's second entrance: a boolean alongside the level. If the CLI sends it that
+# way it wins over the level, because "ultracode" describes what is being spent better
+# than the "xhigh" it translates to.
+if [ "$(printf '%s' "$input" | jq -r '(.ultracode // .effort.ultracode) // empty')" = "true" ]; then
+  effort_lbl="ultra"; effort_col=$C_PURPLE
+fi
 effort_str=$(printf "%s%s%s" "$effort_col" "$effort_lbl" "$C_RESET")
 
 # Model and effort travel as a single field. If the payload carried no model, the
@@ -360,9 +388,11 @@ unir() {  # une los argumentos no vacíos con " | "
 }
 
 linea1=$(unir "$account_str" "${dir_str:+$C_CYAN$dir_str$C_RESET}" "${git_branch:+$C_YELLOW$git_branch$C_RESET}" "$pend_str")
-if [ "$term_cols" -lt 80 ] 2>/dev/null; then
-  # por debajo de 80 columnas no cabe todo: se suelta la ventana de 7 días,
-  # que es la que menos urge, antes que dejar que la línea se parta.
+if [ "$term_cols" -lt 103 ] 2>/dev/null; then
+  # 103 is what the line measures once the bars are already narrow: below that it does
+  # not fit even so, and the 7-day window is dropped -- the least urgent one -- rather
+  # than letting the line wrap. This read 80 until it was measured: between 80 and 102
+  # columns the line still wrapped.
   linea2=$(unir "$model_str" "$ctx_str" "$day_str" "$rl_5h_str")
 else
   linea2=$(unir "$model_str" "$ctx_str" "$day_str" "$rl_5h_str" "$rl_7d_str")
