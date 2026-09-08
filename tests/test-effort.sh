@@ -14,7 +14,7 @@
 #
 # The second defect it guards against is subtler: a MISSING effort being painted as a
 # blank. A gap reads as "no extra effort", the opposite of "I could not read it". So
-# the no-data path has its own expected string, "e:s/med", and mutant M2 exists to
+# the no-data path has its own expected string, "n/m", and mutant M2 exists to
 # prove the test would catch its removal.
 #
 # Negative control: `bash tests/test-effort.sh --mutants` breaks statusline.sh three
@@ -55,6 +55,20 @@ payload() { # payload <effort-level-or-empty> <with-model:yes|no>
     "$eff" "$mdl" "$HOME" "$HOME"
 }
 
+expect_line2_starts() { # <description> <wanted prefix> <payload> <settings>
+  local desc="$1" want="$2" got
+  got=$(run "$3" "$4" | tail -1)
+  if [ -s "$TMP/err" ]; then
+    bad "$desc - statusline wrote to STDERR: $(head -1 "$TMP/err")"
+  elif [ -z "$got" ]; then
+    bad "$desc - statusline printed nothing"
+  elif [ "${got#"$want"}" != "$got" ]; then
+    ok "$desc -> line 2 opens with $want"
+  else
+    bad "$desc - line 2 should open with [$want], got [$got]"
+  fi
+}
+
 expect() { # expect <description> <wanted substring> <payload> <settings> [columns]
   local desc="$1" want="$2" got
   got=$(run "$3" "$4" "${5:-120}")
@@ -71,32 +85,39 @@ expect() { # expect <description> <wanted substring> <payload> <settings> [colum
   fi
 }
 
+# The level is painted bare, with no prefix, so asserting on "hi" or "lo" alone would
+# be a two-letter substring that matches almost anything else on the bar. Every case
+# anchors to the WHOLE field -- the model, a space, then the level -- which is exactly
+# what the user reads.
+M="opus-5[1m]"
+
 suite() {
   echo "== POSITIVE control: every level reaches the bar =="
-  expect "level low"       "e:lo"  "$(payload low yes)"    '{"effortLevel":"medium"}'
-  expect "level medium"    "e:md"  "$(payload medium yes)" '{"effortLevel":"low"}'
-  expect "level high"      "e:hi"  "$(payload high yes)"   '{"effortLevel":"low"}'
-  expect "level xhigh"     "e:xhi" "$(payload xhigh yes)"  '{"effortLevel":"low"}'
-  expect "level max"       "e:max" "$(payload max yes)"    '{"effortLevel":"low"}'
+  expect "level low"       "$M lo"  "$(payload low yes)"    '{"effortLevel":"medium"}'
+  expect "level medium"    "$M md"  "$(payload medium yes)" '{"effortLevel":"low"}'
+  expect "level high"      "$M hi"  "$(payload high yes)"   '{"effortLevel":"low"}'
+  expect "level xhigh"     "$M xhi" "$(payload xhigh yes)"  '{"effortLevel":"low"}'
+  expect "level max"       "$M max" "$(payload max yes)"    '{"effortLevel":"low"}'
   # The payload must win over settings.json, or the bar would show a stale level.
-  expect "payload beats settings" "e:max" "$(payload max yes)" '{"effortLevel":"low"}'
+  expect "payload beats settings" "$M max" "$(payload max yes)" '{"effortLevel":"low"}'
 
   echo "== a level this script has never seen must not vanish =="
-  expect "unknown level" "e:tur" "$(payload turbo yes)" '{}'
+  expect "unknown level" "$M tur" "$(payload turbo yes)" '{}'
 
   echo "== the effort survives what it does not depend on =="
-  expect "no model in payload" "e:hi"  "$(payload high no)"  '{}'
-  expect "narrow terminal"     "e:max" "$(payload max yes)"  '{}' 70
+  # With no model there is nothing to anchor to, so the level has to OPEN line 2.
+  expect_line2_starts "no model in payload" "hi" "$(payload high no)" '{}'
+  expect "narrow terminal" "$M max" "$(payload max yes)" '{}' 70
 
   echo "== fallback for a CLI that does not send the field =="
   # The case that separates reading the payload from reading settings.json naively:
   # the global says high, the per-model override says xhigh, and the override wins.
-  expect "per-model override wins" "e:xhi" "$(payload '' yes)" \
+  expect "per-model override wins" "$M xhi" "$(payload '' yes)" \
     '{"effortLevel":"high","modelSettings":{"claude-opus-5":{"effortLevel":"xhigh"}}}'
-  expect "global only"             "e:lo"  "$(payload '' yes)" '{"effortLevel":"low"}'
+  expect "global only"             "$M lo"  "$(payload '' yes)" '{"effortLevel":"low"}'
 
   echo "== NEGATIVE control: no data is declared, never blank =="
-  expect "no payload, no settings" "e:s/med" "$(payload '' yes)" NONE
+  expect "no payload, no settings" "$M n/m" "$(payload '' yes)" NONE
 }
 
 # ------------------------------------------------------------------ mutants ---
@@ -110,7 +131,7 @@ mutants() {
 
   local specs=(
     'M1 field computed but never assembled|"$model_str" "$ctx_str"|"$model_short" "$ctx_str"'
-    'M2 missing data painted as a blank|effort_lbl="s/med"|effort_lbl=""'
+    'M2 missing data painted as a blank|effort_lbl="n/m"|effort_lbl=""'
     'M3 fallback ignores the per-model override|(.modelSettings[$m].effortLevel // .effortLevel)|.effortLevel'
   )
   for spec in "${specs[@]}"; do

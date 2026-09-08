@@ -79,7 +79,7 @@ model_short="${model_raw#claude-}"
 # CLI that does not send the field, and there the same precedence is applied.
 #
 # THIRD VALUE. If neither source has it, the gap is NOT swallowed and no value is
-# assumed: it paints "e:s/med" (not measured) in red. A blank space would read as
+# assumed: it paints "n/m" (not measured) in red. A blank space would read as
 # "no extra effort", which is the opposite of what a missing value means.
 effort_raw=$(printf '%s' "$input" | jq -r '.effort.level // empty')
 if [ -z "$effort_raw" ]; then
@@ -97,12 +97,12 @@ case "$effort_raw" in
   high)   effort_lbl="hi";    effort_col=$C_YELLOW ;;
   xhigh)  effort_lbl="xhi";   effort_col=$C_RED    ;;
   max)    effort_lbl="max";   effort_col=$C_RED    ;;
-  "")     effort_lbl="s/med"; effort_col=$C_RED    ;;
+  "")     effort_lbl="n/m";   effort_col=$C_RED    ;;
   # A level not on this list is NOT dropped: it is painted truncated and in purple,
   # which is how you find out the CLI shipped a new one.
   *)      effort_lbl=$(printf '%.3s' "$effort_raw"); effort_col=$C_PURPLE ;;
 esac
-effort_str=$(printf "%se:%s%s" "$effort_col" "$effort_lbl" "$C_RESET")
+effort_str=$(printf "%s%s%s" "$effort_col" "$effort_lbl" "$C_RESET")
 
 # Model and effort travel as a single field. If the payload carried no model, the
 # effort still shows: making sure it appears is the whole point of this block.
