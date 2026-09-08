@@ -110,21 +110,58 @@ and limit-reset information for supported native fields.
 A custom [Claude Code](https://claude.com/claude-code) status line that shows, in one compact bar:
 
 ```
-opus-4-8 | main | cpt [████░░░░░░] 43%·112k | chat $1.23 | 🕓 6h12m | 5h [████░░░░░░] 35% ⟳06:00pm (2h14m) | 7d [█░░░░░░░░░] 12%
+you@example.com | ~/project | main | ⏳ 3 tasks · 1 running
+opus-4-8 e:xhi | cpt [████░░░░] 43%·112k | 🕓 6h12m | 5h [███░░░░░] 35% ↻2h14m | 7d [█░░░░░░░] 12%
 ```
 
 | Segment | Meaning |
 |---------|---------|
 | `opus-4-8` | Active model (the `claude-` prefix is stripped) |
+| `e:xhi` | **Reasoning effort** in force, colour-coded by what it costs (see below) |
 | `main` | Current git branch (only when the cwd is a repo) |
 | `cpt [██░░] 43%·112k` | How close the next **auto-compaction** is, and the tokens left before it (see below) |
-| `chat $1.23` | Session cost in USD |
 | `🕓 6h12m` | Total active work time on this machine **today** (see below) |
-| `5h [██░░] 35% ⟳06:00pm (2h14m)` | 5-hour rate-limit usage + reset time + live countdown |
+| `5h [██░░] 35% ↻2h14m` | 5-hour rate-limit usage + countdown to the reset |
 | `7d [█░░░] 12%` | 7-day rate-limit usage |
 | `⏳ 3 tasks · 1 running` | Open tasks **of this terminal's session** |
 
 The three usage bars are **color-coded by threshold**: green `<60%`, yellow `60–84%`, red `≥85%` — so you can read the state at a glance.
+
+### Why the reasoning effort is on the bar (`e:xhi`)
+
+What a turn costs is not set by the model alone, it is set by the pair **model ×
+effort**. On the same `opus-5`, going from `high` to `xhigh` changes the reasoning
+tokens spent per turn. A bar that names the model and says nothing about the effort
+looks complete and gives you nothing to forecast a run's cost with.
+
+| Shown | Level | Colour |
+|-------|-------|--------|
+| `e:lo` | `low` | green |
+| `e:md` | `medium` | green |
+| `e:hi` | `high` | yellow |
+| `e:xhi` | `xhigh` | red |
+| `e:max` | `max` | red |
+| `e:s/med` | could not be read | red |
+
+The value comes from `effort.level` in the status JSON, **already resolved** by the
+CLI. It is deliberately not read from `settings.json`, for two measured reasons:
+
+- `settings.json` can hold a global `effortLevel` **and** a per-model override in
+  `modelSettings`. On the machine this was written on the global said `high` and the
+  override said `xhigh`, and the payload said `xhigh` — reading the file naively gives
+  the wrong answer whenever an override exists.
+- the effective level **changes within a single session** (a capture on bundle
+  `2.1.263` saw `xhigh` and `max` on different turns). Nothing on disk reflects that.
+
+`settings.json` is used only as a fallback for a CLI old enough not to send the field,
+and there the same precedence is applied (override beats global). A level this script
+has never heard of is not dropped — it is printed truncated, in purple, which is how
+you find out the CLI shipped a new one.
+
+If neither source has it, the bar prints `e:s/med` in red rather than leaving a gap.
+A gap would read as *"no extra effort"*, which is the opposite of *"I could not read
+it"*. `tests/test-effort.sh` covers that path, and its mutant `M2` exists to prove the
+suite would notice if it were ever turned back into a blank.
 
 ### Why the context bar measures auto-compaction, not the window
 
@@ -217,8 +254,16 @@ Restart Claude Code, or run `/statusline`.
 The script reads the status JSON from stdin, so you can dry-run it:
 
 ```bash
-echo '{"model":{"id":"claude-opus-4-8"},"cwd":".","context_window":{"used_percentage":42.7},"cost":{"total_cost_usd":1.23},"rate_limits":{"five_hour":{"used_percentage":35,"resets_at":1750460400},"seven_day":{"used_percentage":12}}}' \
+echo '{"model":{"id":"claude-opus-4-8"},"effort":{"level":"xhigh"},"cwd":".","context_window":{"used_percentage":42.7},"rate_limits":{"five_hour":{"used_percentage":35,"resets_at":1750460400},"seven_day":{"used_percentage":12}}}' \
   | bash statusline.sh
+```
+
+Drop the `effort` key from that payload to see the fallback, and point
+`CLAUDE_SETTINGS` at a throwaway file to drive it:
+
+```bash
+echo '{"effortLevel":"high","modelSettings":{"claude-opus-4-8":{"effortLevel":"max"}}}' > /tmp/s.json
+echo '{"model":{"id":"claude-opus-4-8"},"cwd":"."}' | CLAUDE_SETTINGS=/tmp/s.json bash statusline.sh
 ```
 
 ## Google Antigravity CLI (`agy`)
@@ -272,9 +317,15 @@ Run the test suites with:
 ```bash
 bash tests/test-install.sh      # the detecting installer, with its negative controls
 bash tests/test-worktime.sh     # the work-time counter and its AI detector
+bash tests/test-effort.sh       # the reasoning-effort segment on every path
 bash tests/test-install-codex.sh
 bash tests/test-codex-usage.sh
 ```
+
+`tests/test-effort.sh --mutants` is its negative control: it breaks `statusline.sh`
+three concrete ways — the field computed but never assembled, missing data painted as
+a blank, and the fallback ignoring the per-model override — and demands the suite go
+red on all three. A check that has never failed has not shown it knows how to fail.
 
 `tests/test-install.sh` runs every case against a throwaway `HOME` and a `PATH` that
 holds only what the case is meant to find — on a machine with all three CLIs

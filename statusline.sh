@@ -61,6 +61,57 @@ account_str=""
 model_raw=$(printf '%s' "$input" | jq -r '.model.id // ""')
 model_short="${model_raw#claude-}"
 
+# -- 1.5 Effort: the reasoning effort level -----------------------------------
+# WHY IT BELONGS ON THE BAR. A turn's cost is not set by the model alone, it is set
+# by the pair model x effort: on the same opus-5, going from high to xhigh changes
+# the reasoning tokens spent per turn. Without seeing the effort there is nothing to
+# forecast the cost of a run with, which is why it is painted RIGHT NEXT to the
+# model: they are one decision.
+#
+# WHERE IT COMES FROM, AND WHY NOT FROM settings.json. The statusLine payload carries
+# effort.level ALREADY RESOLVED (measured on bundle 2.1.263 by capturing a real
+# payload). On the machine this was written on, settings.json had effortLevel="high"
+# globally and modelSettings["claude-opus-5"].effortLevel="xhigh", and the payload
+# said "xhigh": reading settings.json would give the WRONG value whenever a per-model
+# override exists. On top of that the effective level VARIES within a single session
+# -the same capture saw xhigh and max on different turns- and no setting on disk
+# reflects that. So the payload wins. settings.json is only the fallback for an older
+# CLI that does not send the field, and there the same precedence is applied.
+#
+# THIRD VALUE. If neither source has it, the gap is NOT swallowed and no value is
+# assumed: it paints "e:s/med" (not measured) in red. A blank space would read as
+# "no extra effort", which is the opposite of what a missing value means.
+effort_raw=$(printf '%s' "$input" | jq -r '.effort.level // empty')
+if [ -z "$effort_raw" ]; then
+  # The modelSettings key carries NO context-window suffix: the payload says
+  # "claude-opus-5[1m]" while the setting key is "claude-opus-5".
+  model_key="${model_raw%%[*}"
+  effort_raw=$(jq -r --arg m "$model_key" \
+    '(.modelSettings[$m].effortLevel // .effortLevel) // empty' \
+    "${CLAUDE_SETTINGS:-$HOME/.claude/settings.json}" 2>/dev/null)
+fi
+# Colour tracks what it costs, so the expensive levels stand out without reading.
+case "$effort_raw" in
+  low)    effort_lbl="lo";    effort_col=$C_GREEN  ;;
+  medium) effort_lbl="md";    effort_col=$C_GREEN  ;;
+  high)   effort_lbl="hi";    effort_col=$C_YELLOW ;;
+  xhigh)  effort_lbl="xhi";   effort_col=$C_RED    ;;
+  max)    effort_lbl="max";   effort_col=$C_RED    ;;
+  "")     effort_lbl="s/med"; effort_col=$C_RED    ;;
+  # A level not on this list is NOT dropped: it is painted truncated and in purple,
+  # which is how you find out the CLI shipped a new one.
+  *)      effort_lbl=$(printf '%.3s' "$effort_raw"); effort_col=$C_PURPLE ;;
+esac
+effort_str=$(printf "%se:%s%s" "$effort_col" "$effort_lbl" "$C_RESET")
+
+# Model and effort travel as a single field. If the payload carried no model, the
+# effort still shows: making sure it appears is the whole point of this block.
+if [ -n "$model_short" ]; then
+  model_str="$model_short $effort_str"
+else
+  model_str="$effort_str"
+fi
+
 # ── 2. Git branch (only if cwd is inside a repo) ─────────────────────────────
 cwd=$(printf '%s' "$input" | jq -r '.cwd // .workspace.current_dir // ""')
 git_branch=""
@@ -312,9 +363,9 @@ linea1=$(unir "$account_str" "${dir_str:+$C_CYAN$dir_str$C_RESET}" "${git_branch
 if [ "$term_cols" -lt 80 ] 2>/dev/null; then
   # por debajo de 80 columnas no cabe todo: se suelta la ventana de 7 días,
   # que es la que menos urge, antes que dejar que la línea se parta.
-  linea2=$(unir "$model_short" "$ctx_str" "$day_str" "$rl_5h_str")
+  linea2=$(unir "$model_str" "$ctx_str" "$day_str" "$rl_5h_str")
 else
-  linea2=$(unir "$model_short" "$ctx_str" "$day_str" "$rl_5h_str" "$rl_7d_str")
+  linea2=$(unir "$model_str" "$ctx_str" "$day_str" "$rl_5h_str" "$rl_7d_str")
 fi
 
 [ -n "$linea1" ] && printf '%s\n' "$linea1"
