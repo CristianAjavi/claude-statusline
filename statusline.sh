@@ -90,7 +90,21 @@ if [ -n "$cwd" ]; then
 fi
 
 # ── 3. Context window bar ────────────────────────────────────────────────────
+# THE BAR MEASURES TOWARDS AUTO-COMPACT, not towards the end of the window. The payload
+# ships used_percentage computed against context_window_size, but compaction does not
+# wait for the window to fill: it fires at `autoCompactWindow` (settings.json). With a
+# 1M window and a 250k compact threshold, compaction hits at ~22% of the window, so a
+# bar drawn against the window sits near a quarter full at the very moment it is about
+# to compact -and any "you should compact" nudge placed above that never fires at all.
+# When autoCompactWindow is not set, the code falls back to the plain window bar.
 ctx_pct=$(printf '%s' "$input" | jq -r '.context_window.used_percentage // empty')
+ctx_tok=$(printf '%s' "$input" | jq -r '.context_window.total_input_tokens // empty')
+acw=$(jq -r '.autoCompactWindow // empty' "$HOME/.claude/settings.json" 2>/dev/null)
+ctx_cpt=""
+if [ -n "$ctx_tok" ] && [ -n "$acw" ] && [ "$acw" -gt 0 ] 2>/dev/null; then
+  ctx_cpt=1
+  ctx_pct=$(awk -v t="$ctx_tok" -v w="$acw" 'BEGIN{p=t*100/w; printf "%.0f", (p>100?100:p)}')
+fi
 if [ -n "$ctx_pct" ]; then
   filled=$(awk -v n="$ctx_pct" -v d="$bar_total" 'BEGIN{printf "%.0f", n*d/100}')
   [ "$filled" -lt 0 ] 2>/dev/null && filled=0
@@ -100,7 +114,26 @@ if [ -n "$ctx_pct" ]; then
   while [ $i -lt "$filled" ]; do bar="${bar}█"; i=$(( i + 1 )); done
   while [ $i -lt "$bar_total" ]; do bar="${bar}░"; i=$(( i + 1 )); done
   c=$(color_for_pct "$ctx_pct")
-  ctx_str=$(printf "%sctx [%s] %.0f%%%s" "$c" "$bar" "$ctx_pct" "$C_RESET")
+  if [ -n "$ctx_cpt" ]; then
+    # Only what changes a decision fits on this line:
+    #   bar + %   how close the next compaction is, at a glance
+    #   ·NNk      tokens left before the cut - the number you actually decide with
+    #             ("do I send this instruction now, or compact first?")
+    # The window percentage is deliberately NOT shown: with a fixed window and a fixed
+    # threshold it is a constant fraction of the number already on screen.
+    # Label is "cpt", not "compact": four characters back on a crowded line, and it
+    # stays distinct from "ctx", which is the fallback bar measuring the window.
+    ctx_rest=$(awk -v t="$ctx_tok" -v w="$acw" 'BEGIN{r=w-t; printf "%.0f", (r<0?0:r)/1000}')
+    ctx_str=$(printf "%scpt [%s] %.0f%%·%sk%s" \
+      "$c" "$bar" "$ctx_pct" "$ctx_rest" "$C_RESET")
+    # Past 85% compaction is imminent. Worth knowing: an instruction typed in this band
+    # gets folded into the summary as background rather than as a live order.
+    if awk -v n="$ctx_pct" 'BEGIN{exit !(n>=85)}'; then
+      ctx_str="${ctx_str} ${C_RED}◂now${C_RESET}"
+    fi
+  else
+    ctx_str=$(printf "%sctx [%s] %.0f%%%s" "$c" "$bar" "$ctx_pct" "$C_RESET")
+  fi
 else
   ctx_str=""
 fi

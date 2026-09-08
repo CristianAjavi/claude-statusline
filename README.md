@@ -74,20 +74,36 @@ and limit-reset information for supported native fields.
 A custom [Claude Code](https://claude.com/claude-code) status line that shows, in one compact bar:
 
 ```
-opus-4-8 | main | ctx [████░░░░░░] 43% | chat $1.23 | 🕓 6h12m | 5h [████░░░░░░] 35% ⟳06:00pm (2h14m) | 7d [█░░░░░░░░░] 12%
+opus-4-8 | main | cpt [████░░░░░░] 43%·112k | chat $1.23 | 🕓 6h12m | 5h [████░░░░░░] 35% ⟳06:00pm (2h14m) | 7d [█░░░░░░░░░] 12%
 ```
 
 | Segment | Meaning |
 |---------|---------|
 | `opus-4-8` | Active model (the `claude-` prefix is stripped) |
 | `main` | Current git branch (only when the cwd is a repo) |
-| `ctx [██░░] 43%` | Context window used |
+| `cpt [██░░] 43%·112k` | How close the next **auto-compaction** is, and the tokens left before it (see below) |
 | `chat $1.23` | Session cost in USD |
 | `🕓 6h12m` | Total active work time on this machine **today** (see below) |
 | `5h [██░░] 35% ⟳06:00pm (2h14m)` | 5-hour rate-limit usage + reset time + live countdown |
 | `7d [█░░░] 12%` | 7-day rate-limit usage |
 
 The three usage bars are **color-coded by threshold**: green `<60%`, yellow `60–84%`, red `≥85%` — so you can read the state at a glance.
+
+### Why the context bar measures auto-compaction, not the window
+
+Claude Code ships `context_window.used_percentage` computed against the **model window**,
+but compaction does not wait for the window to fill: it fires at `autoCompactWindow` in
+`settings.json`. With a 1M window and a 250k threshold, compaction hits at ~22% of the
+window — so a bar drawn against the window sits barely a quarter full at the exact moment
+it is about to compact, and any "time to compact" nudge above that never fires at all.
+
+So `cpt` measures the distance to the **cut**: the bar and `%` for the glance, and `·NNk`
+for the tokens left, which is the number you actually decide with. Past 85% it appends a
+red `◂now`: an instruction typed in that band tends to land in the compaction summary as
+background rather than as a live order.
+
+If `autoCompactWindow` is not set in `settings.json`, the segment falls back to the plain
+window bar, labelled `ctx [██░░] 43%`.
 
 Empty segments are skipped automatically (e.g. branch is hidden outside a repo).
 
