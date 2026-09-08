@@ -124,6 +124,7 @@ opus-4-8 xhigh | cpt [████░░░░] 43%·112k | 🕓 6h12m | 5h [█
 | `5h [██░░] 35% ↻2h14m` | 5-hour rate-limit usage + countdown to the reset |
 | `7d [█░░░] 12%` | 7-day rate-limit usage |
 | `⏳ 3 tasks · 1 running` | Open tasks **of this terminal's session** |
+| `████░ 4/5` | Task progress, at the end of line 1 — **off unless you turn it on** (see below) |
 
 The three usage bars are **color-coded by threshold**: green `<60%`, yellow `60–84%`, red `≥85%` — so you can read the state at a glance.
 
@@ -177,6 +178,38 @@ If neither source has it, the bar prints `n/m` in red rather than leaving a gap.
 A gap would read as *"no extra effort"*, which is the opposite of *"I could not read
 it"*. `tests/test-effort.sh` covers that path, and its mutant `M2` exists to prove the
 suite would notice if it were ever turned back into a blank.
+
+### The task progress bar, and why it ships off (`████░ 4/5`)
+
+An output style that renders a progress table spends **output tokens** every turn to
+say "4 of 5 done". The terminal can paint the same thing for free: this bar costs 0
+context tokens, so the progress can live here and the style can stop printing it. It
+is deliberately narrow — 5 cells, not the 20 of a text table — because it rides at the
+end of a line that already carries the account, the path and the branch.
+
+It ships **disabled**. Nobody who installed this asked for a progress bar, and a
+segment that turns up uninvited is a regression for them. `STATUSLINE_TASK_BAR` is the
+switch:
+
+| Value | Effect |
+|-------|--------|
+| unset, `0`, `off`, `false` | nothing is painted — **the default** |
+| `1`, `on`, `true` | always painted |
+| `conciso,my-style` | a comma-separated list of **output-style names**: painted only while the payload's `output_style.name` is one of them |
+
+That third form is the one worth having. The style that would otherwise print the
+table is exactly the thing that should switch the bar on, so the bar appears when that
+adapter is running and disappears when it is not. Names are matched whole and
+case-insensitively; `conc` does not turn on `Conciso`.
+
+It counts the tasks of **this session** (`~/.claude/tasks/<session_id>/`), the same
+ones behind the `⏳` segment: completed over total. Five cells is a coarse ruler, so
+two readings are clamped rather than rounded — a bar is never empty while something is
+done, and never full while something is open. "Nothing started" and "all finished" are
+precisely the two states that change what you do next, and neither may be shown unless
+it is true. `tests/test-task-bar.sh` covers the switch, both clamps and the name
+matching; its mutants `M2`, `M3` and `M4` exist to prove the suite would notice if the
+switch or either clamp were removed.
 
 ### Why the context bar measures auto-compaction, not the window
 
@@ -333,14 +366,20 @@ Run the test suites with:
 bash tests/test-install.sh      # the detecting installer, with its negative controls
 bash tests/test-worktime.sh     # the work-time counter and its AI detector
 bash tests/test-effort.sh       # the reasoning-effort segment on every path
+bash tests/test-task-bar.sh     # the task progress bar: off by default, honest when on
 bash tests/test-install-codex.sh
 bash tests/test-codex-usage.sh
 ```
 
 `tests/test-effort.sh --mutants` is its negative control: it breaks `statusline.sh`
-three concrete ways — the field computed but never assembled, missing data painted as
-a blank, and the fallback ignoring the per-model override — and demands the suite go
-red on all three. A check that has never failed has not shown it knows how to fail.
+five concrete ways — the field computed but never assembled, missing data painted as a
+blank, the fallback ignoring the per-model override, the ultracode boolean ignored, and
+an unknown level truncated back to three letters — and demands the suite go red on all
+five. A check that has never failed has not shown it knows how to fail.
+
+`tests/test-task-bar.sh --mutants` does the same for the progress bar, and its first
+mutant is the one that matters most: the switch ignored, so the bar paints for someone
+who never asked for it.
 
 `tests/test-install.sh` runs every case against a throwaway `HOME` and a `PATH` that
 holds only what the case is meant to find — on a machine with all three CLIs

@@ -374,6 +374,66 @@ if [ -n "$sid" ]; then
 fi
 
 
+# -- 7.7 Task progress bar, at the END of line 1 (SHIPPED OFF) ----------------
+# WHY IT EXISTS. An output style that renders a progress table spends OUTPUT tokens
+# every turn to say "4 of 5 done". The terminal can paint the same thing for free:
+# this bar costs 0 context tokens. So the progress lives here and the style can stop
+# printing it. It is deliberately narrow -- 5 cells, not the 20 of a text table --
+# because it rides at the end of a line that already carries account, path and branch.
+#
+# WHY IT SHIPS OFF. Nobody who installed this asked for a progress bar, and a segment
+# that turns up uninvited is a regression for them. It is wired but not switched on.
+# STATUSLINE_TASK_BAR is the switch:
+#   unset | 0 | off | false   nothing is painted            (the default)
+#   1 | on | true             always painted
+#   <names>                   comma-separated output-style names; painted only while
+#                             the payload's output_style.name is one of them -- which
+#                             is how "only when I am running that output adapter" is
+#                             said, since the adapter is exactly what stops printing
+#                             its own table.
+task_bar_str=""
+tb_mode=$(printf '%s' "${STATUSLINE_TASK_BAR:-}" | tr '[:upper:]' '[:lower:]')
+tb_on=""
+case "$tb_mode" in
+  ""|0|off|false) tb_on="" ;;
+  1|on|true)      tb_on="yes" ;;
+  *)
+    tb_style=$(printf '%s' "$input" | jq -r '.output_style.name // empty' \
+               | tr '[:upper:]' '[:lower:]')
+    if [ -n "$tb_style" ]; then
+      case ",$tb_mode," in
+        *",$tb_style,"*) tb_on="yes" ;;
+      esac
+    fi
+    ;;
+esac
+if [ -n "$tb_on" ] && [ -n "$task_dir" ] && [ -d "$task_dir" ]; then
+  t_hecho=$(grep -l '"status": *"completed"' "$task_dir"/*.json 2>/dev/null | wc -l | tr -d ' ')
+  t_total=$(( t_open + t_hecho ))
+  if [ "$t_total" -gt 0 ] 2>/dev/null; then
+    tb_w=5
+    tb_fill=$(awk -v n="$t_hecho" -v t="$t_total" -v w="$tb_w" 'BEGIN{printf "%.0f", n*w/t}')
+    # Two clamps, both about not lying at a glance. Rounding to 5 cells is coarse
+    # enough that 1 of 12 rounds to an EMPTY bar and 11 of 12 rounds to a FULL one --
+    # "nothing started" and "all done" are precisely the two readings that change what
+    # you do next, so neither may be shown unless it is true.
+    if [ "$t_hecho" -gt 0 ] && [ "$tb_fill" -lt 1 ]; then tb_fill=1; fi
+    if [ "$t_hecho" -lt "$t_total" ] && [ "$tb_fill" -ge "$tb_w" ]; then
+      tb_fill=$(( tb_w - 1 ))
+    fi
+    tb_bar=""
+    i=0
+    while [ $i -lt "$tb_fill" ]; do tb_bar="${tb_bar}█"; i=$(( i + 1 )); done
+    while [ $i -lt "$tb_w" ];    do tb_bar="${tb_bar}░"; i=$(( i + 1 )); done
+    # Green only when there is nothing left to do; yellow while work is open. The
+    # usual color_for_pct is not reused on purpose: there a high number is bad, here
+    # a high number is the goal, and reusing it would paint "almost finished" red.
+    tb_col=$C_YELLOW
+    [ "$t_hecho" = "$t_total" ] && tb_col=$C_GREEN
+    task_bar_str=$(printf "%s%s %d/%d%s" "$tb_col" "$tb_bar" "$t_hecho" "$t_total" "$C_RESET")
+  fi
+fi
+
 # ── Ensamblado en DOS líneas ─────────────────────────────────────────────────
 # Línea 1 — dónde estoy: cuenta | carpeta | rama.
 # Línea 2 — con qué y cuánto llevo: modelo | contexto | tiempo del día | ventanas 5h y 7d.
@@ -387,7 +447,7 @@ unir() {  # une los argumentos no vacíos con " | "
   printf '%s' "$out"
 }
 
-linea1=$(unir "$account_str" "${dir_str:+$C_CYAN$dir_str$C_RESET}" "${git_branch:+$C_YELLOW$git_branch$C_RESET}" "$pend_str")
+linea1=$(unir "$account_str" "${dir_str:+$C_CYAN$dir_str$C_RESET}" "${git_branch:+$C_YELLOW$git_branch$C_RESET}" "$pend_str" "$task_bar_str")
 if [ "$term_cols" -lt 103 ] 2>/dev/null; then
   # 103 is what the line measures once the bars are already narrow: below that it does
   # not fit even so, and the 7-day window is dropped -- the least urgent one -- rather
