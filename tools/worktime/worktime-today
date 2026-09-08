@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# AI work-time report. No arguments: today. With a date: that day.
+#   worktime-today              -> today
+#   worktime-today 2026-08-30   -> that day
+#   worktime-today --week       -> the last 7 days
+set -u
+WORKTIME_DIR="${WORKTIME_DIR:-$HOME/.claude/worktime}"
+LABEL="${WORKTIME_LABEL:-com.github.claude-statusline.worktime}"
+
+hhmm() { printf '%dh%02dm' $(( $1 / 3600 )) $(( ($1 % 3600) / 60 )); }
+
+report_day() {
+  local day="$1" kv="$WORKTIME_DIR/$1.kv" legacy="$WORKTIME_DIR/$1"
+  if [ ! -f "$kv" ]; then
+    if [ -f "$legacy" ]; then
+      # A day older than the external heartbeat. The figure exists, but it only ever
+      # saw Claude Code -and only while it was repainting its bar- so it is a floor,
+      # not a total. Say so rather than let it read as a measured number.
+      local acc; acc=$(awk '{print $2+0; exit}' "$legacy")
+      printf '%s  %s   CLAUDE ONLY (old counter; Codex and agy were not measured)\n' \
+             "$day" "$(hhmm "$acc")"
+    else
+      printf '%s  no data\n' "$day"
+    fi
+    return
+  fi
+  local total gaps last now age
+  total=$(awk -F'\t' '$1=="total"{print $2+0}' "$kv")
+  gaps=$(awk -F'\t' '$1=="gaps"{print $2+0}' "$kv")
+  last=$(awk -F'\t' '$1=="last"{print $2+0}' "$kv")
+  printf '%s  TOTAL %s' "$day" "$(hhmm "${total:-0}")"
+  [ "${gaps:-0}" -gt 0 ] 2>/dev/null && \
+    printf '   (%s UNMEASURED stretch(es): machine asleep or heartbeat down)' "$gaps"
+  printf '\n'
+  # The day the heartbeat was installed is MIXED: it carries over whatever the old
+  # mechanism had counted, which only saw Claude. Saying it is the only thing that
+  # stops that part from reading as if it had been measured the new way.
+  local mig; mig=$(awk -F'\t' '$1=="migrated"{print $2+0}' "$kv")
+  if [ "${mig:-0}" -gt 0 ] 2>/dev/null; then
+    printf '            of which %s comes from the old counter (CLAUDE ONLY).\n' "$(hhmm "$mig")"
+  fi
+  awk -F'\t' -v tot="${total:-0}" '
+    $1 ~ /^tool:/ {
+      h = substr($1, 6); s = $2 + 0
+      pct = (tot > 0 ? s * 100 / tot : 0)
+      printf "    %-10s %2dh%02dm  %5.1f%%\n", h, s/3600, (s%3600)/60, pct
+    }' "$kv" | sort -k2 -r
+  # If the day is TODAY, say whether the heartbeat is alive. A stopped counter looks
+  # exactly like a quiet day, and that is the confusion worth preventing.
+  if [ "$day" = "$(date +%F)" ]; then
+    now=$(date +%s); age=$(( now - ${last:-0} ))
+    if [ "$age" -gt 180 ]; then
+      printf '    !! the heartbeat has not written for %s min: the number above is FROZEN\n' \
+             "$(( age / 60 ))"
+      printf '       check with: launchctl list | grep %s\n' "$LABEL"
+    fi
+  fi
+}
+
+case "${1:-}" in
+  --week|-w)
+    for i in 6 5 4 3 2 1 0; do
+      report_day "$(date -v-${i}d +%F 2>/dev/null || date -d "-$i day" +%F)"
+    done ;;
+  "") report_day "$(date +%F)" ;;
+  *)  report_day "$1" ;;
+esac
+
+cat <<'NOTE'
+
+What counts: minutes with active keyboard/mouse (under 5 min idle) and at least one
+AI tool open. TOTAL is the union -three AIs at once are not worth triple-; the
+per-tool breakdown overlaps and can add up to more than TOTAL.
+NOTE

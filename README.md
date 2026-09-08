@@ -2,6 +2,42 @@
 
 Compact status-line presets for [Claude Code](https://claude.com/claude-code), [Codex CLI](https://developers.openai.com/codex/cli/), and [Google Antigravity CLI (`agy`)](https://antigravity.google/docs/cli/statusline).
 
+## Install
+
+```bash
+git clone https://github.com/CristianAjavi/claude-statusline.git
+cd claude-statusline
+./install.sh
+```
+
+It asks nothing. It detects which of the three CLIs this machine actually uses and
+installs the matching status line for each — Claude Code and Antigravity get the
+shell script, Codex gets its native TUI field list, since Codex does not execute a
+script at all. The work-time counter is installed alongside, whichever CLI was found.
+
+A CLI counts as *in use* when its binary is on `PATH` **or** its config directory
+exists. Either signal alone is wrong: a binary behind an alias or a version manager
+may not be on `PATH`, and a config directory can outlive an uninstall. The detection
+is printed before anything is written, so a wrong guess is visible rather than silent.
+
+```text
+Detected:
+  Claude Code    found (claude on PATH)
+  Codex          found (~/.codex exists)
+  Antigravity    not found
+```
+
+| Flag | Effect |
+|---|---|
+| `--dry-run` | Print what it would do and write nothing |
+| `--all` | Install all three, detected or not |
+
+If nothing is detected it exits non-zero without writing anything: a status line
+wired into a CLI that is not there is just a config file nobody asked for. Existing
+settings are always preserved and backed up with a timestamp. Each CLI can also be
+installed on its own with `install-claude.sh`, `install-codex.sh` or
+`install-antigravity.sh`.
+
 ## Codex
 
 Codex has a native TUI footer, so it does not execute `statusline.sh` or consume
@@ -86,6 +122,7 @@ opus-4-8 | main | cpt [████░░░░░░] 43%·112k | chat $1.23 | 
 | `🕓 6h12m` | Total active work time on this machine **today** (see below) |
 | `5h [██░░] 35% ⟳06:00pm (2h14m)` | 5-hour rate-limit usage + reset time + live countdown |
 | `7d [█░░░] 12%` | 7-day rate-limit usage |
+| `⏳ 3 tasks · 1 running` | Open tasks **of this terminal's session** |
 
 The three usage bars are **color-coded by threshold**: green `<60%`, yellow `60–84%`, red `≥85%` — so you can read the state at a glance.
 
@@ -107,22 +144,27 @@ window bar, labelled `ctx [██░░] 43%`.
 
 Empty segments are skipped automatically (e.g. branch is hidden outside a repo).
 
-### Daily work-time counter (`🕓`)
+### Work-time counter (`🕓`)
 
-A purple counter that accumulates how long you've actually been working on the
-machine **today**, across **all** Claude Code sessions combined.
+A purple counter of how long you have actually been working with an AI **today**,
+across **every** CLI on the machine — not just the one drawing this bar.
 
-It works by heartbeat: every time the status line re-renders it stamps a
-timestamp in `~/.claude/worktime/YYYY-MM-DD` and adds the gap since the previous
-heartbeat **only if that gap is under 5 minutes** (`IDLE_LIMIT`). Longer gaps are
-treated as idle and ignored. Because it sums wall-clock gaps (not just API time),
-it naturally includes tool-execution and reading time, and because all sessions
-share one daily file it does **not** double-count parallel windows. The file is
-per-day, so the counter resets automatically each day.
+It used to be a heartbeat inside `statusline.sh`, which only runs when Claude Code
+repaints its bar. Hours spent in Codex or Antigravity were therefore never counted: a
+counter bound to the program it measures cannot measure the others. The heartbeat now
+lives in `tools/worktime/tick.sh`, runs every 60 s under launchd and is the only
+writer; this script only reads. An interval counts when there was keyboard or mouse
+input in the last 5 minutes **and** at least one AI tool is alive. `TOTAL` is the
+union — three tools open at once are not worth triple.
 
-Note: it only counts time while a Claude Code status line is rendering — not your
-whole workday outside Claude. Tune `IDLE_LIMIT` in the script to be more/less
-forgiving about pauses.
+A red `!` after the figure means the heartbeat has not written for 3 minutes while
+this bar is demonstrably repainting: the number is frozen, not low. If the heartbeat
+was never installed the segment is simply absent — an uninstalled counter and a dead
+one must not look the same.
+
+macOS only: the idle time comes from `ioreg -c IOHIDSystem`, which has no portable
+equivalent (X11 needs `xprintidle`, Wayland exposes nothing standard). `install.sh`
+skips it elsewhere. See [`tools/worktime/README.md`](tools/worktime/README.md).
 
 ### Requirements
 
@@ -135,39 +177,40 @@ and BSD `date`, and auto-locates a winget-installed `jq` on Windows.
 
 ### Install for Claude Code
 
-1. Copy `statusline.sh` into your Claude Code config dir:
+```bash
+./install-claude.sh
+```
 
-   **macOS / Linux**
-   ```bash
-   curl -fsSL https://raw.githubusercontent.com/CristianAjavi/claude-statusline/main/statusline.sh \
-     -o ~/.claude/statusline.sh
-   chmod +x ~/.claude/statusline.sh
-   ```
+Wires `statusline.sh` into `~/.claude/settings.json`, preserving every other key and
+leaving a timestamped backup. It also warns when `autoCompactWindow` is unset — it
+reports it and never sets it, because that key changes how your sessions behave and
+is yours to decide.
 
-   **Windows (Git-Bash)**
-   ```bash
-   curl -fsSL https://raw.githubusercontent.com/CristianAjavi/claude-statusline/main/statusline.sh \
-     -o "$HOME/.claude/statusline.sh"
-   ```
+<details>
+<summary>Manual install (or Windows / Git-Bash)</summary>
 
-2. Point Claude Code at it in `~/.claude/settings.json`:
+```bash
+curl -fsSL https://raw.githubusercontent.com/CristianAjavi/claude-statusline/main/statusline.sh \
+  -o ~/.claude/statusline.sh
+chmod +x ~/.claude/statusline.sh
+```
 
-   ```json
-   {
-     "statusLine": {
-       "type": "command",
-       "command": "bash ~/.claude/statusline.sh",
-       "padding": 0
-     }
-   }
-   ```
+Then in `~/.claude/settings.json`:
 
-   On Windows use the absolute path:
-   ```json
-   "command": "bash C:/Users/<you>/.claude/statusline.sh"
-   ```
+```json
+{
+  "statusLine": {
+    "type": "command",
+    "command": "bash ~/.claude/statusline.sh",
+    "padding": 0
+  }
+}
+```
 
-3. Restart Claude Code (or run `/statusline`).
+On Windows use the absolute path: `"command": "bash C:/Users/<you>/.claude/statusline.sh"`.
+
+Restart Claude Code, or run `/statusline`.
+</details>
 
 ### Test the Claude Code script
 
@@ -227,9 +270,15 @@ echo '{"cwd":".","email":"user@gmail.com","plan_tier":"Pro","model":{"id":"Gemin
 Run the test suites with:
 
 ```bash
+bash tests/test-install.sh      # the detecting installer, with its negative controls
+bash tests/test-worktime.sh     # the work-time counter and its AI detector
 bash tests/test-install-codex.sh
 bash tests/test-codex-usage.sh
 ```
+
+`tests/test-install.sh` runs every case against a throwaway `HOME` and a `PATH` that
+holds only what the case is meant to find — on a machine with all three CLIs
+installed, that is the only way the "nothing detected" case means anything.
 
 ## License
 

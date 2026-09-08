@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Heartbeat of the AI work-time counter. Every 60 s.
+  Canonical copy: tools/worktime/com.github.claude-statusline.worktime.plist
+  Installed at:   ~/Library/LaunchAgents/  (install.sh puts it there)
+  RunAtLoad on top of StartInterval so the first beat seeds today's file without
+  waiting a minute after login.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>            <string>com.github.claude-statusline.worktime</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>PLACEHOLDER_TICK</string>
+  </array>
+  <key>StartInterval</key>    <integer>60</integer>
+  <key>RunAtLoad</key>        <true/>
+  <key>ProcessType</key>      <string>Background</string>
+  <key>LowPriorityIO</key>    <true/>
+  <key>StandardErrorPath</key><string>PLACEHOLDER_LOG</string>
+</dict>
+</plist>

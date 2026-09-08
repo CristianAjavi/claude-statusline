@@ -76,7 +76,7 @@ if [ -n "$cwd" ]; then
     dir_str="~"
   elif [ "${cwd#$HOME/}" != "$cwd" ]; then
     resto="${cwd#$HOME/}"
-    # dentro de casa: ~/reels-ia, y si anida mucho, ~/…/lotus/motores
+    # dentro de casa: ~/my-project, y si anida mucho, ~/…/lotus/motores
     case "$resto" in
       */*/*) dir_str="~/…/$(basename "$(dirname "$cwd")")/$(basename "$cwd")" ;;
       *)     dir_str="~/$resto" ;;
@@ -133,6 +133,15 @@ if [ -n "$ctx_pct" ]; then
     fi
   else
     ctx_str=$(printf "%sctx [%s] %.0f%%%s" "$c" "$bar" "$ctx_pct" "$C_RESET")
+  fi
+
+  # FALLBACK PATH ONLY. When the payload carries no total_input_tokens the bar is
+  # back to measuring the window, and then it has to say what to do about it: past
+  # CTX_COMPACT_NUDGE% it appends `/compact`. On the `cpt` path this nudge would be
+  # noise -the bar already measures the distance to the cut.
+  nudge_pct=${CTX_COMPACT_NUDGE:-50}
+  if [ -z "$ctx_cpt" ] && awk -v n="$ctx_pct" -v u="$nudge_pct" 'BEGIN{exit !(n>=u)}'; then
+    ctx_str="${ctx_str} ${C_YELLOW:-}/compact${C_RESET}"
   fi
 else
   ctx_str=""
@@ -212,36 +221,79 @@ if [ -n "$rl_7d_pct" ]; then
   fi
 fi
 
-# ── 7. Tiempo total de trabajo en máquina HOY (heartbeat, incluye tools) ─────
-# Suma los huecos entre redibujados de la barra que sean < IDLE_LIMIT.
-# Huecos mayores = tiempo muerto y no se cuentan. Se reinicia cada día.
-# Es un total general de la máquina: todas las sesiones comparten el mismo
-# archivo diario, así que no duplica el tiempo de ventanas en paralelo.
+# ── 7. Time worked with AI today (every tool, not just this one) ───────
+# THIS BAR NO LONGER COUNTS: IT ONLY READS.
+#
+# The counter used to be a heartbeat of this very script, and this script only runs
+# when Claude Code repaints its bar. Measured consequence: hours spent in Codex or
+# Antigravity NEVER entered the number -on a day with all three open, the detector
+# saw three tools while the figure reflected one. A counter bound to the program it
+# measures cannot measure the others.
+#
+# The heartbeat now lives outside, in tools/worktime/tick.sh, run every 60 s by
+# launchd, and it is the ONLY writer. Here we read. Two writers would double-count
+# the time inside Claude windows and single-count everywhere else, which is the same
+# bias wearing a different hat.
+#
+# macOS ONLY: the heartbeat needs the HID idle time, and `ioreg` is the only portable
+# way to get it on a Mac. install.sh skips it elsewhere, and this block then leaves
+# the segment out entirely rather than showing a permanent red marker.
 wt_dir="$HOME/.claude/worktime"
-mkdir -p "$wt_dir" 2>/dev/null
-wt_file="$wt_dir/$(date +%Y-%m-%d)"
-now_epoch=$(date +%s)
-IDLE_LIMIT=300            # 5 min sin actividad = idle, no cuenta
-last=0; acc=0
-[ -f "$wt_file" ] && read -r last acc < "$wt_file" 2>/dev/null
-[ -z "$last" ] && last=0
-[ -z "$acc" ]  && acc=0
-if [ "$last" -gt 0 ] 2>/dev/null; then
-  gap=$(( now_epoch - last ))
-  if [ "$gap" -ge 0 ] && [ "$gap" -lt "$IDLE_LIMIT" ]; then
-    acc=$(( acc + gap ))
+wt_kv="$wt_dir/$(date +%Y-%m-%d).kv"
+day_str=""
+if [ -f "$wt_kv" ]; then
+  acc=$(awk -F'\t' '$1=="total"{print $2+0; exit}' "$wt_kv" 2>/dev/null)
+  wt_last=$(awk -F'\t' '$1=="last"{print $2+0; exit}' "$wt_kv" 2>/dev/null)
+  [ -z "$acc" ] && acc=0
+  [ -z "$wt_last" ] && wt_last=0
+  day_h=$(( acc / 3600 )); day_m=$(( (acc % 3600) / 60 ))
+  # THIRD VALUE. A dead heartbeat freezes the figure, and a frozen figure looks
+  # exactly like a quiet day. If nothing has been written for over 3 minutes WHILE
+  # this bar is repainting -that is, while work is demonstrably happening- it is
+  # flagged with a red `!`. Reinstall with: bash tools/worktime/install.sh
+  wt_now=$(date +%s)
+  if [ $(( wt_now - wt_last )) -gt 180 ] 2>/dev/null; then
+    day_str=$(printf "%s🕓 %dh%02dm%s!%s" "$C_PURPLE" "$day_h" "$day_m" "$C_RED" "$C_RESET")
+  else
+    day_str=$(printf "%s🕓 %dh%02dm%s" "$C_PURPLE" "$day_h" "$day_m" "$C_RESET")
   fi
+elif [ -f "$HOME/.claude/worktime/.installed" ]; then
+  # The heartbeat IS installed but wrote no file for today: that is a real failure
+  # and it gets said out loud. Without the marker file we cannot tell this apart
+  # from "never installed", so the segment is simply absent above.
+  day_str=$(printf "%s🕓 n/a%s" "$C_RED" "$C_RESET")
 fi
-printf '%s %s\n' "$now_epoch" "$acc" > "$wt_file"
-day_h=$(( acc / 3600 ))
-day_m=$(( (acc % 3600) / 60 ))
-day_str=$(printf "%s🕓 %dh%02dm%s" "$C_PURPLE" "$day_h" "$day_m" "$C_RESET")
 
 
 # ── 7.5 Aviso de registro: RETIRADO ─────────────────────────────────────────
 # Mientras se trabaja, la intervención en curso todavía no está marcada, así que
 # el aviso saltaba siempre: falso positivo estructural. Quien vigila eso es el
 # hook Stop `cierre-tanda.py`, que bloquea el cierre. La barra no repite trabajo.
+
+# ── 7.6 Open tasks of THIS terminal ─────────────────────────────
+# Counts ONLY the tasks of this session (~/.claude/tasks/<session_id>/). Reading a
+# global backlog here was a mistake worth naming: two unrelated terminals then showed
+# the same count, which tells you nothing about the window you are looking at.
+# The terminal paints this bar, not the prompt: it costs 0 context tokens.
+sid=$(printf '%s' "$input" | jq -r '.session_id // empty')
+pend_str=""
+if [ -n "$sid" ]; then
+  task_dir="$HOME/.claude/tasks/$sid"
+  if [ -d "$task_dir" ]; then
+    t_pend=$(grep -l '"status": *"pending"' "$task_dir"/*.json 2>/dev/null | wc -l | tr -d ' ')
+    t_curso=$(grep -l '"status": *"in_progress"' "$task_dir"/*.json 2>/dev/null | wc -l | tr -d ' ')
+    t_open=$((t_pend + t_curso))
+    plural="tasks"; [ "$t_open" = "1" ] && plural="task"
+    if [ "$t_open" -gt 0 ] 2>/dev/null; then
+      if [ "$t_curso" -gt 0 ] 2>/dev/null; then
+        pend_str=$(printf "%s⏳ %d %s · %d running%s" "$C_YELLOW" "$t_open" "$plural" "$t_curso" "$C_RESET")
+      else
+        pend_str=$(printf "%s⏳ %d %s%s" "$C_GREEN" "$t_open" "$plural" "$C_RESET")
+      fi
+    fi
+  fi
+fi
+
 
 # ── Ensamblado en DOS líneas ─────────────────────────────────────────────────
 # Línea 1 — dónde estoy: cuenta | carpeta | rama.
@@ -256,7 +308,7 @@ unir() {  # une los argumentos no vacíos con " | "
   printf '%s' "$out"
 }
 
-linea1=$(unir "$account_str" "${dir_str:+$C_CYAN$dir_str$C_RESET}" "${git_branch:+$C_YELLOW$git_branch$C_RESET}")
+linea1=$(unir "$account_str" "${dir_str:+$C_CYAN$dir_str$C_RESET}" "${git_branch:+$C_YELLOW$git_branch$C_RESET}" "$pend_str")
 if [ "$term_cols" -lt 80 ] 2>/dev/null; then
   # por debajo de 80 columnas no cabe todo: se suelta la ventana de 7 días,
   # que es la que menos urge, antes que dejar que la línea se parta.
