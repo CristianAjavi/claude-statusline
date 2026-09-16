@@ -176,11 +176,20 @@ fi
 # bar drawn against the window sits near a quarter full at the very moment it is about
 # to compact -and any "you should compact" nudge placed above that never fires at all.
 # When autoCompactWindow is not set, the code falls back to the plain window bar.
+#
+# THE CUT IS NOT autoCompactWindow: the CLI compacts 33k EARLIER (min(output, 20k) plus a
+# 13k cushion; measured on bundle 2.1.273, where `claude --debug` prints effectiveWindow =
+# window - 20k). Measured against the raw window the bar read 86%·33k at the exact moment
+# it compacted, and the 85% warning fired 1k before the cut instead of ahead of it. The
+# "how many k are left" figure is the one a decision is made with, so it counts to the
+# real cut. The environment variable wins over settings.json, same precedence as the CLI.
+cpt_margin=33000
 ctx_pct=$(printf '%s' "$input" | jq -r '.context_window.used_percentage // empty')
 ctx_tok=$(printf '%s' "$input" | jq -r '.context_window.total_input_tokens // empty')
-acw=$(jq -r '.autoCompactWindow // empty' "$HOME/.claude/settings.json" 2>/dev/null)
+acw=${CLAUDE_CODE_AUTO_COMPACT_WINDOW:-$(jq -r '.autoCompactWindow // empty' "$HOME/.claude/settings.json" 2>/dev/null)}
 ctx_cpt=""
-if [ -n "$ctx_tok" ] && [ -n "$acw" ] && [ "$acw" -gt 0 ] 2>/dev/null; then
+if [ -n "$ctx_tok" ] && [ -n "$acw" ] && [ "$acw" -gt "$cpt_margin" ] 2>/dev/null; then
+  acw=$(( acw - cpt_margin ))
   ctx_cpt=1
   ctx_pct=$(awk -v t="$ctx_tok" -v w="$acw" 'BEGIN{p=t*100/w; printf "%.0f", (p>100?100:p)}')
 fi

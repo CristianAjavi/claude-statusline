@@ -224,8 +224,20 @@ for the tokens left, which is the number you actually decide with. Past 85% it a
 red `◂now`: an instruction typed in that band tends to land in the compaction summary as
 background rather than as a live order.
 
-If `autoCompactWindow` is not set in `settings.json`, the segment falls back to the plain
+**The cut is not `autoCompactWindow` itself — it is 33k earlier.** The CLI reserves
+`min(output, 20k)` plus a 13k cushion, so on bundle 2.1.273 `claude --debug` prints
+`effectiveWindow = window - 20k` and the real cut lands a full margin before the setting.
+Measured against the raw setting the bar read `86%·33k` at the very moment it compacted,
+and the 85% warning fired 1k *after* the point it was meant to warn about. `cpt` therefore
+counts to `autoCompactWindow - 33000`, reaching 100%·0k exactly at the cut. The
+`CLAUDE_CODE_AUTO_COMPACT_WINDOW` environment variable overrides the setting, same
+precedence as the CLI itself.
+
+If neither the environment variable nor `autoCompactWindow` is set — or the window is
+smaller than the 33k margin — the segment invents no cut and falls back to the plain
 window bar, labelled `ctx [██░░] 43%`.
+
+Covered by `tests/test-compact.sh` (7 cases, `--mutants` for the negative control).
 
 Empty segments are skipped automatically (e.g. branch is hidden outside a repo).
 
@@ -367,6 +379,7 @@ bash tests/test-install.sh      # the detecting installer, with its negative con
 bash tests/test-worktime.sh     # the work-time counter and its AI detector
 bash tests/test-effort.sh       # the reasoning-effort segment on every path
 bash tests/test-task-bar.sh     # the task progress bar: off by default, honest when on
+bash tests/test-compact.sh      # the cpt bar reaches 100% at the real compaction cut
 bash tests/test-install-codex.sh
 bash tests/test-codex-usage.sh
 ```
