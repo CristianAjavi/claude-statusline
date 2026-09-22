@@ -55,6 +55,11 @@ payload() { # payload <effort-level-or-empty> <with-model:yes|no>
     "$eff" "$mdl" "$HOME" "$HOME"
 }
 
+payload_t() { # payload_t <effort-level> <transcript-path>
+  printf '{"effort":{"level":"%s"},"model":{"id":"claude-opus-5[1m]"},"transcript_path":"%s","cwd":"%s"}' \
+    "$1" "$2" "$HOME"
+}
+
 expect_absent() { # <description> <string that must NOT appear> <payload> <settings>
   local desc="$1" unwanted="$2" got
   got=$(run "$3" "$4")
@@ -130,6 +135,23 @@ suite() {
   expect "ultracode as a boolean" "$M ultra" \
     '{"effort":{"level":"xhigh"},"ultracode":true,"model":{"id":"claude-opus-5[1m]"},"cwd":"'"$HOME"'"}' '{}'
 
+  echo "== ultracode, by the entrance the CLI actually uses: the transcript =="
+  # Measured on 2.1.280: the payload says "xhigh" and nothing else. The transcript
+  # holds the /effort stdout, so the fixture reproduces that line verbatim.
+  printf '%s\n' '{"type":"user","message":{"content":"<local-command-stdout>Set effort level to ultracode (this session only): xhigh + dynamic workflow orchestration</local-command-stdout>"}}' > "$TMP/t-ultra.jsonl"
+  cp "$TMP/t-ultra.jsonl" "$TMP/t-moved.jsonl"
+  printf '%s\n' '{"type":"user","message":{"content":"<local-command-stdout>Set effort level to xhigh (this session only)</local-command-stdout>"}}' >> "$TMP/t-moved.jsonl"
+  expect "transcript says ultracode" "$M ultra" "$(payload_t xhigh "$TMP/t-ultra.jsonl")" '{}'
+  # The last command wins: ultracode then plain xhigh is plain xhigh.
+  expect "a later /effort replaces it" "$M xhigh" "$(payload_t xhigh "$TMP/t-moved.jsonl")" '{}'
+  # A stale ultracode line must not relabel a level that moved without a command.
+  expect "payload not xhigh ignores it" "$M high" "$(payload_t high "$TMP/t-ultra.jsonl")" '{}'
+  expect "transcript missing" "$M xhigh" "$(payload_t xhigh "$TMP/absent.jsonl")" '{}'
+  # The phrase merely QUOTED (a tool result, a chat message) is stored JSON-escaped.
+  # It must not count as the user having picked ultracode.
+  printf '%s\n' '{"type":"user","message":{"content":[{"type":"tool_result","content":"{\"content\":\"<local-command-stdout>Set effort level to ultracode\"}"}]}}' > "$TMP/t-quoted.jsonl"
+  expect "quoted mention is not a command" "$M xhigh" "$(payload_t xhigh "$TMP/t-quoted.jsonl")" '{}'
+
   echo "== a level this script has never seen must not vanish =="
   # Painted WHOLE, not truncated: a half name is easy to mistake for a known one.
   expect "unknown level" "$M turbo" "$(payload turbo yes)" '{}'
@@ -165,6 +187,11 @@ mutants() {
     'M3 fallback ignores the per-model override|(.modelSettings[$m].effortLevel // .effortLevel)|.effortLevel'
     'M4 the ultracode boolean is ignored|(.ultracode // .effort.ultracode)|.nothing_at_all'
     'M5 an unknown level is truncated again|effort_lbl="$effort_raw"|effort_lbl=$(printf %.3s "$effort_raw")'
+    'M6 the transcript entrance is ignored|${last_set##* }|${last_set}'
+    'M7 a stale ultracode line relabels any level|[ "$effort_raw" = "xhigh" ]|[ -n "$effort_raw" ]'
+    # No "|" inside the anchor: it is the field separator of this list.
+    'M8 the first /effort wins instead of the last|tail -1)|head -1)'
+    'M9 a quoted mention counts as the command|"content":"<local-command-stdout>(Set|(Set'
   )
   for spec in "${specs[@]}"; do
     name="${spec%%|*}"; local rest="${spec#*|}"

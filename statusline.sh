@@ -100,14 +100,15 @@ if [ -z "$effort_raw" ]; then
     "${CLAUDE_SETTINGS:-$HOME/.claude/settings.json}" 2>/dev/null)
 fi
 # Colour tracks what it costs, so the expensive levels stand out without reading.
-# ULTRACODE. On bundle 2.1.263 ultracode is not one more level: it is a session
-# switch meaning "xhigh plus standing workflow orchestration" -- literally
-# U={ultracode:"xhigh"} in the code -- so with ultracode on, the payload might say
-# "ultracode" or might already say "xhigh". WHICH ONE IS NOT MEASURED here, because
-# measuring it means turning ultracode on in a live session. Both entrances are
-# wired: the literal level below, and the standalone boolean right after. If it
-# arrives either way it shows; if it arrives neither way the bar says "xhigh", which
-# is the effort actually being spent and therefore not a lie.
+# ULTRACODE. Measured on bundle 2.1.280: the payload NEVER says ultracode. It builds
+# effort:{level:Ok(...)} and Ok() coerces anything outside
+# ["low","medium","high","xhigh","max"] into that list, while ultracode is a session
+# flag mapped to "xhigh" (W={ultracode:"xhigh"}). No ultracode field is sent either.
+# So with ultracode on, the bar said "xhigh" and the choice the user made was gone.
+# The only trace of it is in the transcript: /effort writes
+# "Set effort level to ultracode" as local-command stdout. The third entrance below
+# reads the LAST such line, and only when the payload says xhigh -- if the level
+# moved elsewhere afterwards, the stale line must not relabel it.
 case "$effort_raw" in
   low)       effort_lbl="low";    effort_col=$C_GREEN  ;;
   medium)    effort_lbl="medium"; effort_col=$C_GREEN  ;;
@@ -129,6 +130,19 @@ esac
 # than the "xhigh" it translates to.
 if [ "$(printf '%s' "$input" | jq -r '(.ultracode // .effort.ultracode) // empty')" = "true" ]; then
   effort_lbl="ultra"; effort_col=$C_PURPLE
+fi
+# The third entrance, the one that fires today: the transcript. Every way of setting
+# the effort by command leaves one of these three phrasings; the last one wins.
+if [ "$effort_raw" = "xhigh" ]; then
+  transcript=$(printf '%s' "$input" | jq -r '.transcript_path // empty')
+  if [ -n "$transcript" ] && [ -f "$transcript" ]; then
+    # Anchored on the raw JSON of a real command output, bare quotes and all. The same
+    # phrase quoted in a tool result or in chat is stored escaped (\"content\":...)
+    # and must not count: measured, without this anchor the session that wrote this
+    # fix matched its own quoted fixtures instead of the real /effort line.
+    last_set=$(LC_ALL=C grep -a -o -E '"content":"<local-command-stdout>(Set effort level to|Effort level set to|Effort set to) [a-z]+' "$transcript" 2>/dev/null | tail -1)
+    [ "${last_set##* }" = "ultracode" ] && { effort_lbl="ultra"; effort_col=$C_PURPLE; }
+  fi
 fi
 effort_str=$(printf "%s%s%s" "$effort_col" "$effort_lbl" "$C_RESET")
 
