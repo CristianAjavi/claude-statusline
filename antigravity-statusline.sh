@@ -205,7 +205,11 @@ q_parsed=$(printf '%s' "$input" | jq -c --arg mid "$mid" '
     {
       short: get_entry("gemini-5h"; "5h"),
       long: (get_entry("gemini-argon-wtu-weekly"; "argon") // get_entry("gemini-weekly"; "weekly")),
-      extra: null
+      extra: (
+        if ($q["gemini-argon-wtu-weekly"] != null and $q["gemini-weekly"] != null) then
+          get_entry("gemini-weekly"; "weekly")
+        else null end
+      )
     }
   elif ($mid | contains("claude") or ($mid | contains("sonnet")) or ($mid | contains("opus")) or ($mid | contains("3p"))) then
     {
