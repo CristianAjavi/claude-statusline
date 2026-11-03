@@ -331,8 +331,8 @@ echo '{"model":{"id":"claude-opus-4-8"},"cwd":"."}' | CLAUDE_SETTINGS=/tmp/s.jso
 A custom status line for [Google Antigravity CLI (`agy`)](https://antigravity.google/docs/cli/statusline) that renders:
 
 ```
-cristianajavi(Pro) | ~/my-project | main
-gemini-3.7-flash | ctx [█░░░░░░░] 14% | 🕓 6h12m | quota [█░░░░░░░] 12% ↻2d02h
+cristianajavi(Pro) | ~/my-project | main | ⚙ working
+gemini-4-argon·medium | ctx [█░░░░░░░] 12%·125k | 🕓 3h28m | 5h [░░░░░░░░] 3% ↻4h06m | argon [████████] 99% ↻5d16h
 ```
 
 | Segment | Meaning |
@@ -340,11 +340,19 @@ gemini-3.7-flash | ctx [█░░░░░░░] 14% | 🕓 6h12m | quota [█�
 | `cristianajavi(Pro)` | User account / subscription plan tier |
 | `~/my-project` | Abbreviated working directory |
 | `main` | Current Git branch |
-| `gemini-3.7-flash` | Active model |
-| `ctx [█░░░] 14%` | Context window token usage bar |
-| `🕓 6h12m` | Daily work time counter (shared heartbeat) |
-| `quota [█░░░] 12%` | Quota percentage and countdown to next reset |
+| `⚙ working` | Agent execution state or mode |
+| `gemini-4-argon·medium` | Active model with reasoning effort badge (color-coded by cost) |
+| `ctx [█░░░] 12%·125k` | Context window token usage bar with live input token count |
+| `🕓 3h28m` | Daily work time counter (shared `.kv` launchd heartbeat) |
+| `5h [░░░░] 3% ↻4h06m` | 5-hour burst window usage and countdown |
+| `argon [████] 99% ↻5d16h` | Dedicated model weekly pool (e.g. Gemini 4 Argon WTU) or `weekly` general quota |
 | `⚙ 2 tasks` | Active background tasks (shown when `task_count > 0`) |
+
+### Model Quota Mapping
+
+- **Gemini 4 Argon**: displays short-term burst (`5h`) and dedicated Workload Token Units pool (`argon`).
+- **Gemini Flash / Pro**: displays short-term burst (`5h`) and standard weekly pool (`weekly`), plus an alert badge for `argon` if exhausted.
+- **Claude / Sonnet (3P)**: displays third-party 5-hour limit (`3p-5h`) and weekly limit (`3p-7d`).
 
 ### Install for Antigravity
 
@@ -366,7 +374,7 @@ Or configure manually in `~/.gemini/antigravity-cli/settings.json`:
 ### Test Antigravity status line
 
 ```bash
-echo '{"cwd":".","email":"user@gmail.com","plan_tier":"Pro","model":{"id":"Gemini 3.7 Flash (High)"},"context_window":{"used_percentage":14.5},"quota":{"gemini-weekly":{"remaining_fraction":0.88,"reset_in_seconds":180000}}}' \
+echo '{"cwd":".","email":"user@gmail.com","plan_tier":"Pro","model":{"id":"Gemini 4 Argon (Medium)","effort":"medium"},"context_window":{"used_percentage":12.5,"total_input_tokens":125000},"quota":{"gemini-5h":{"remaining_fraction":0.97,"reset_in_seconds":15000},"gemini-argon-wtu-weekly":{"remaining_fraction":0.005,"reset_in_seconds":490000}}}' \
   | bash antigravity-statusline.sh
 ```
 
@@ -380,6 +388,7 @@ bash tests/test-worktime.sh     # the work-time counter and its AI detector
 bash tests/test-effort.sh       # the reasoning-effort segment on every path
 bash tests/test-task-bar.sh     # the task progress bar: off by default, honest when on
 bash tests/test-compact.sh      # the cpt bar reaches 100% at the real compaction cut
+bash tests/test-antigravity.sh  # antigravity model, effort, context token count & smart quotas
 bash tests/test-install-codex.sh
 bash tests/test-codex-usage.sh
 ```

@@ -21,7 +21,7 @@ term_cols=$(printf '%s' "$input" | jq -r '.terminal_width // empty' 2>/dev/null)
 [ -z "$term_cols" ] && term_cols=$(tput cols 2>/dev/null)
 [ -z "$term_cols" ] && term_cols=80
 
-if   [ "$term_cols" -ge 100 ] 2>/dev/null; then bar_total=8
+if   [ "$term_cols" -ge 115 ] 2>/dev/null; then bar_total=8
 elif [ "$term_cols" -ge 88 ]  2>/dev/null; then bar_total=6
 else                                            bar_total=4
 fi
@@ -98,20 +98,35 @@ elif [ -n "$exec_mode" ] && [ "$exec_mode" != "default" ]; then
   state_str="${C_BLUE}${exec_mode}${C_RESET}"
 fi
 
-# ── 4. Modelo activo (simplificado con nivel de esfuerzo) ───────────────────
+# ── 4. Modelo activo (simplificado con nivel de esfuerzo coloreado) ─────────
 model_raw=$(printf '%s' "$input" | jq -r '.model.display_name // .model.id // ""')
-effort=$(printf '%s' "$model_raw" | grep -ioE "\(high\)|\(medium\)|\(low\)" | tr -d '()' | tr '[:upper:]' '[:lower:]' || true)
+effort_json=$(printf '%s' "$input" | jq -r '.model.effort // empty')
+if [ -n "$effort_json" ]; then
+  effort=$(printf '%s' "$effort_json" | tr '[:upper:]' '[:lower:]')
+else
+  effort=$(printf '%s' "$model_raw" | grep -ioE "\(high\)|\(medium\)|\(low\)" | tr -d '()' | tr '[:upper:]' '[:lower:]' || true)
+fi
+
 model_base=$(printf '%s' "$model_raw" | sed -E 's/ \((high|medium|low)\)//I' | tr '[:upper:]' '[:lower:]' | tr ' ' '-')
 [ -z "$model_base" ] && model_base="$model_raw"
 
+case "$effort" in
+  low|medium) effort_col=$C_GREEN ;;
+  high)       effort_col=$C_YELLOW ;;
+  xhigh|max)  effort_col=$C_RED ;;
+  ultra*)     effort_col=$C_PURPLE ;;
+  *)          effort_col=$C_GRAY ;;
+esac
+
 if [ -n "$effort" ]; then
-  model_short="${model_base}${C_GRAY}·${effort}${C_RESET}"
+  model_short="${model_base}${C_GRAY}·${effort_col}${effort}${C_RESET}"
 else
   model_short="$model_base"
 fi
 
-# ── 5. Barra de Context Window ──────────────────────────────────────────────
+# ── 5. Barra de Context Window con conteo de tokens ─────────────────────────
 ctx_pct=$(printf '%s' "$input" | jq -r '.context_window.used_percentage // empty')
+ctx_tok=$(printf '%s' "$input" | jq -r '.context_window.total_input_tokens // empty')
 ctx_str=""
 if [ -n "$ctx_pct" ]; then
   filled=$(awk -v n="$ctx_pct" -v d="$bar_total" 'BEGIN{printf "%.0f", n*d/100}')
@@ -122,120 +137,181 @@ if [ -n "$ctx_pct" ]; then
   while [ $i -lt "$filled" ]; do bar="${bar}█"; i=$(( i + 1 )); done
   while [ $i -lt "$bar_total" ]; do bar="${bar}░"; i=$(( i + 1 )); done
   c=$(color_for_pct "$ctx_pct")
-  ctx_str=$(printf "%sctx [%s] %.0f%%%s" "$c" "$bar" "$ctx_pct" "$C_RESET")
+
+  tok_str=""
+  if [ -n "$ctx_tok" ] && [ "$ctx_tok" -gt 0 ] 2>/dev/null; then
+    tok_str=$(awk -v t="$ctx_tok" 'BEGIN{printf "·%.0fk", t/1000}')
+  fi
+
+  ctx_str=$(printf "%sctx [%s] %.0f%%%s%s" "$c" "$bar" "$ctx_pct" "$tok_str" "$C_RESET")
 fi
 
-# ── 6. Rate limits / Cuota por modelo ────────────────────────────────────────
-quota_info=$(printf '%s' "$input" | jq -c '
-  .model as $m |
-  (($m.id // $m.display_name // "") | ascii_downcase) as $mid |
-  .quota as $q |
-  if $q == null or ($q | length == 0) then
-    { bucket: "none", used_pct: null, resets_in: null, unmetered: true }
-  else
-    ($q | to_entries | map(
-      .key as $k |
-      ($k | ascii_downcase) as $k_low |
-      select(
-        ($mid != "" and ($k_low | contains($mid))) or
-        ($mid != "" and ($mid | contains($k_low))) or
-        (if ($mid | contains("sonnet")) then ($k_low | contains("sonnet") or contains("claude"))
-         elif ($mid | contains("flash")) then ($k_low | contains("flash") or contains("gemini"))
-         elif ($mid | contains("pro")) then ($k_low | contains("pro") or contains("gemini"))
-         elif ($mid | contains("gemini")) then ($k_low | contains("gemini"))
-         else false end)
-      )
-    ) | .[0]) as $match |
-    (if $match != null then $match else ($q | to_entries | .[0]) end) as $target |
-    if $target.value.remaining_fraction != null then
-      {
-        bucket: $target.key,
-        used_pct: ((1 - $target.value.remaining_fraction) * 100),
-        resets_in: ($target.value.reset_in_seconds // null),
-        unmetered: false
-      }
-    else
-      { bucket: $target.key, used_pct: null, resets_in: null, unmetered: true }
-    end
-  end
-' 2>/dev/null)
+# ── 6. Rate limits / Cuotas inteligentes por modelo ─────────────────────────
+format_quota_segment() {
+  local lbl="$1"
+  local used_pct="$2"
+  local resets_in="$3"
+  local unmetered="$4"
+  local bt="${5:-$bar_total}"
 
-quota_unmetered=$(printf '%s' "$quota_info" | jq -r '.unmetered // false' 2>/dev/null)
-quota_used_pct=$(printf '%s' "$quota_info" | jq -r '.used_pct // empty' 2>/dev/null)
-quota_resets_in=$(printf '%s' "$quota_info" | jq -r '.resets_in // empty' 2>/dev/null)
-quota_bucket=$(printf '%s' "$quota_info" | jq -r '.bucket // empty' 2>/dev/null)
+  if [ "$unmetered" = "true" ] || [ -z "$used_pct" ]; then
+    printf "%s%s [∞]%s" "$C_GREEN" "$lbl" "$C_RESET"
+    return
+  fi
 
-bucket_label=""
-case "$quota_bucket" in
-  *sonnet*|*claude*) bucket_label="sonnet" ;;
-  *flash*)          bucket_label="flash" ;;
-  *pro*)            bucket_label="pro" ;;
-  *weekly*)         bucket_label="weekly" ;;
-  *)                bucket_label="" ;;
-esac
-
-quota_str=""
-if [ "$quota_unmetered" = "true" ] || [ "$quota_bucket" = "none" ]; then
-  quota_str="${C_GREEN}quota [∞]${C_RESET}"
-elif [ -n "$quota_used_pct" ]; then
-  filled=$(awk -v n="$quota_used_pct" -v d="$bar_total" 'BEGIN{printf "%.0f", n*d/100}')
+  local filled bar i c
+  filled=$(awk -v n="$used_pct" -v d="$bt" 'BEGIN{printf "%.0f", n*d/100}')
   [ "$filled" -lt 0 ] 2>/dev/null && filled=0
-  [ "$filled" -gt "$bar_total" ] 2>/dev/null && filled=$bar_total
+  [ "$filled" -gt "$bt" ] 2>/dev/null && filled=$bt
   bar=""
   i=0
   while [ $i -lt "$filled" ]; do bar="${bar}█"; i=$(( i + 1 )); done
-  while [ $i -lt "$bar_total" ]; do bar="${bar}░"; i=$(( i + 1 )); done
-  c=$(color_for_pct "$quota_used_pct")
+  while [ $i -lt "$bt" ]; do bar="${bar}░"; i=$(( i + 1 )); done
+  c=$(color_for_pct "$used_pct")
 
-  lbl="quota"
-  [ -n "$bucket_label" ] && lbl="$bucket_label"
-
-  if [ -n "$quota_resets_in" ] && [ "$quota_resets_in" -gt 0 ] 2>/dev/null; then
-    rem_d=$(( quota_resets_in / 86400 ))
-    rem_h=$(( (quota_resets_in % 86400) / 3600 ))
-    rem_m=$(( (quota_resets_in % 3600) / 60 ))
+  local countdown=""
+  if [ -n "$resets_in" ] && [ "$resets_in" -gt 0 ] 2>/dev/null; then
+    local rem_d=$(( resets_in / 86400 ))
+    local rem_h=$(( (resets_in % 86400) / 3600 ))
+    local rem_m=$(( (resets_in % 3600) / 60 ))
     if [ "$rem_d" -gt 0 ]; then
-      countdown=$(printf '%dd%02dh' "$rem_d" "$rem_h")
+      countdown=$(printf ' ↻%dd%02dh' "$rem_d" "$rem_h")
     else
-      countdown=$(printf '%dh%02dm' "$rem_h" "$rem_m")
+      countdown=$(printf ' ↻%dh%02dm' "$rem_h" "$rem_m")
     fi
-    quota_str=$(printf "%s%s [%s] %.0f%% ↻%s%s" "$c" "$lbl" "$bar" "$quota_used_pct" "$countdown" "$C_RESET")
-  else
-    quota_str=$(printf "%s%s [%s] %.0f%%%s" "$c" "$lbl" "$bar" "$quota_used_pct" "$C_RESET")
   fi
+
+  printf "%s%s [%s] %.0f%%%s%s" "$c" "$lbl" "$bar" "$used_pct" "$countdown" "$C_RESET"
+}
+
+mid=$(printf '%s' "$model_raw" | tr '[:upper:]' '[:lower:]')
+
+q_parsed=$(printf '%s' "$input" | jq -c --arg mid "$mid" '
+  (.quota // {}) as $q |
+  def get_entry($k; $lbl):
+    if ($q[$k] != null) then
+      {
+        label: $lbl,
+        bucket: $k,
+        used_pct: (if $q[$k].remaining_fraction != null then ((1 - $q[$k].remaining_fraction) * 100) else null end),
+        resets_in: ($q[$k].reset_in_seconds // null),
+        unmetered: ($q[$k].remaining_fraction == null)
+      }
+    else null end;
+
+  if ($q | length == 0) then
+    { short: { label: "quota", bucket: "unmetered", used_pct: null, resets_in: null, unmetered: true }, long: null, extra: null }
+  elif ($mid | contains("argon")) then
+    {
+      short: get_entry("gemini-5h"; "5h"),
+      long: (get_entry("gemini-argon-wtu-weekly"; "argon") // get_entry("gemini-weekly"; "weekly")),
+      extra: null
+    }
+  elif ($mid | contains("claude") or ($mid | contains("sonnet")) or ($mid | contains("opus")) or ($mid | contains("3p"))) then
+    {
+      short: get_entry("3p-5h"; "3p-5h"),
+      long: get_entry("3p-weekly"; "3p-7d"),
+      extra: null
+    }
+  elif ($mid | contains("gemini") or ($mid | contains("flash")) or ($mid | contains("pro"))) then
+    {
+      short: get_entry("gemini-5h"; "5h"),
+      long: get_entry("gemini-weekly"; "weekly"),
+      extra: (
+        if ($q["gemini-argon-wtu-weekly"] != null and $q["gemini-argon-wtu-weekly"].remaining_fraction != null and ((1 - $q["gemini-argon-wtu-weekly"].remaining_fraction) * 100) >= 85) then
+          get_entry("gemini-argon-wtu-weekly"; "argon")
+        else null end
+      )
+    }
+  else
+    # Fallback genérico para modelos custom o nuevos
+    ($q | to_entries | map({
+      label: (
+        if (.key | contains("5h")) then "5h"
+        elif (.key | contains("argon")) then "argon"
+        elif (.key | contains("weekly")) then "weekly"
+        else "quota" end
+      ),
+      bucket: .key,
+      used_pct: (if .value.remaining_fraction != null then ((1 - .value.remaining_fraction) * 100) else null end),
+      resets_in: (.value.reset_in_seconds // null),
+      unmetered: (.value.remaining_fraction == null)
+    })) as $all |
+    {
+      short: ($all[0] // null),
+      long: ($all[1] // null),
+      extra: null
+    }
+  end
+' 2>/dev/null)
+
+s_lbl=$(printf '%s' "$q_parsed" | jq -r '.short.label // empty' 2>/dev/null)
+s_pct=$(printf '%s' "$q_parsed" | jq -r '.short.used_pct // empty' 2>/dev/null)
+s_rst=$(printf '%s' "$q_parsed" | jq -r '.short.resets_in // empty' 2>/dev/null)
+s_unm=$(printf '%s' "$q_parsed" | jq -r '.short.unmetered // false' 2>/dev/null)
+
+l_lbl=$(printf '%s' "$q_parsed" | jq -r '.long.label // empty' 2>/dev/null)
+l_pct=$(printf '%s' "$q_parsed" | jq -r '.long.used_pct // empty' 2>/dev/null)
+l_rst=$(printf '%s' "$q_parsed" | jq -r '.long.resets_in // empty' 2>/dev/null)
+l_unm=$(printf '%s' "$q_parsed" | jq -r '.long.unmetered // false' 2>/dev/null)
+
+e_lbl=$(printf '%s' "$q_parsed" | jq -r '.extra.label // empty' 2>/dev/null)
+e_pct=$(printf '%s' "$q_parsed" | jq -r '.extra.used_pct // empty' 2>/dev/null)
+e_rst=$(printf '%s' "$q_parsed" | jq -r '.extra.resets_in // empty' 2>/dev/null)
+e_unm=$(printf '%s' "$q_parsed" | jq -r '.extra.unmetered // false' 2>/dev/null)
+
+seg_short=""
+seg_long=""
+seg_extra=""
+[ -n "$s_lbl" ] && seg_short=$(format_quota_segment "$s_lbl" "$s_pct" "$s_rst" "$s_unm" "$bar_total")
+[ -n "$l_lbl" ] && seg_long=$(format_quota_segment "$l_lbl" "$l_pct" "$l_rst" "$l_unm" "$bar_total")
+[ -n "$e_lbl" ] && seg_extra=$(format_quota_segment "$e_lbl" "$e_pct" "$e_rst" "$e_unm" "$bar_total")
+
+# Cuota crítica única para terminales angostos (< 88 columnas)
+seg_critical="$seg_short"
+if [ -n "$l_pct" ] && [ -n "$s_pct" ]; then
+  if awk -v l="$l_pct" -v s="$s_pct" 'BEGIN{exit !(l > s)}' 2>/dev/null; then
+    seg_critical="$seg_long"
+  fi
+elif [ -n "$l_pct" ]; then
+  seg_critical="$seg_long"
 fi
 
 # ── 7. Background Tasks ─────────────────────────────────────────────────────
-task_count=$(printf '%s' "$input" | jq -r '.task_count // 0')
+task_count=$(printf '%s' "$input" | jq -r '.task_count // 0' 2>/dev/null)
 task_str=""
 if [ "$task_count" -gt 0 ] 2>/dev/null; then
   task_str="${C_YELLOW}⚙ ${task_count} task(s)${C_RESET}"
 fi
 
-# ── 8. Tiempo total de trabajo diario (Heartbeat compartido) ────────────────
-wt_dir="$HOME/.claude/worktime"
-mkdir -p "$wt_dir" 2>/dev/null
-wt_file="$wt_dir/$(date +%Y-%m-%d)"
-now_epoch=$(date +%s)
-IDLE_LIMIT=300            # 5 min sin actividad = idle
-last=0; acc=0
-[ -f "$wt_file" ] && read -r last acc < "$wt_file" 2>/dev/null
-[ -z "$last" ] && last=0
-[ -z "$acc" ]  && acc=0
-if [ "$last" -gt 0 ] 2>/dev/null; then
-  gap=$(( now_epoch - last ))
-  if [ "$gap" -ge 0 ] && [ "$gap" -lt "$IDLE_LIMIT" ]; then
-    acc=$(( acc + gap ))
+# ── 8. Tiempo total de trabajo diario (Heartbeat compartido .kv) ────────────
+wt_dir="${WORKTIME_DIR:-$HOME/.claude/worktime}"
+wt_kv="$wt_dir/$(date +%Y-%m-%d).kv"
+marker="$wt_dir/.installed"
+day_str=""
+
+if [ -f "$wt_kv" ]; then
+  acc=$(awk -F'\t' '$1=="total"{print $2+0; exit}' "$wt_kv" 2>/dev/null)
+  wt_last=$(awk -F'\t' '$1=="last"{print $2+0; exit}' "$wt_kv" 2>/dev/null)
+  [ -z "$acc" ] && acc=0
+  [ -z "$wt_last" ] && wt_last=0
+
+  day_h=$(( acc / 3600 ))
+  day_m=$(( (acc % 3600) / 60 ))
+  day_str=$(printf "%s🕓 %dh%02dm%s" "$C_PURPLE" "$day_h" "$day_m" "$C_RESET")
+
+  # Si el demonio no ha emitido latidos en 3 minutos mientras la barra se dibuja, avisar
+  if [ -f "$marker" ] && [ "$wt_last" -gt 0 ] 2>/dev/null; then
+    now_epoch=$(date +%s)
+    if [ $(( now_epoch - wt_last )) -ge 180 ] 2>/dev/null; then
+      day_str="${day_str}${C_RED}!${C_RESET}"
+    fi
   fi
 fi
-printf '%s %s\n' "$now_epoch" "$acc" > "$wt_file" 2>/dev/null || true
-day_h=$(( acc / 3600 ))
-day_m=$(( (acc % 3600) / 60 ))
-day_str=$(printf "%s🕓 %dh%02dm%s" "$C_PURPLE" "$day_h" "$day_m" "$C_RESET")
 
 # ── Ensamblado en DOS líneas ─────────────────────────────────────────────────
 # Línea 1 — Dónde estoy: cuenta (plan) | carpeta | rama | [estado]
-# Línea 2 — Con qué y cuánto: modelo | contexto | tiempo del día | cuota | [tareas]
+# Línea 2 — Con qué y cuánto: modelo | contexto | tiempo del día | cuotas | [tareas]
 unir() {
   local out="" p
   for p in "$@"; do
@@ -247,10 +323,14 @@ unir() {
 
 linea1=$(unir "$account_str" "${dir_str:+$C_CYAN$dir_str$C_RESET}" "${git_branch:+$C_YELLOW$git_branch$C_RESET}" "$state_str")
 
-if [ "$term_cols" -lt 80 ] 2>/dev/null; then
-  linea2=$(unir "$model_short" "$ctx_str" "$day_str")
+if [ "$term_cols" -ge 115 ] 2>/dev/null; then
+  linea2=$(unir "$model_short" "$ctx_str" "$day_str" "$seg_short" "$seg_long" "$seg_extra" "$task_str")
+elif [ "$term_cols" -ge 88 ] 2>/dev/null; then
+  linea2=$(unir "$model_short" "$ctx_str" "$day_str" "$seg_short" "$seg_long" "$task_str")
+elif [ "$term_cols" -ge 70 ] 2>/dev/null; then
+  linea2=$(unir "$model_short" "$ctx_str" "$day_str" "$seg_critical")
 else
-  linea2=$(unir "$model_short" "$ctx_str" "$day_str" "$quota_str" "$task_str")
+  linea2=$(unir "$model_short" "$ctx_str" "$seg_critical")
 fi
 
 [ -n "$linea1" ] && printf '%s\n' "$linea1"
