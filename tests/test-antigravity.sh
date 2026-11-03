@@ -96,10 +96,10 @@ else
   bad "Flash quotas missing: got $out_flash"
 fi
 
-if printf '%s\n' "$out_flash" | grep -qE "argon \[[^]]*\] (99%|100%)"; then
-  ok "Flash wide view includes alert for maxed Argon quota"
+if ! printf '%s\n' "$out_flash" | grep -q "argon"; then
+  ok "Argon does NOT appear when active model is Flash (only active model quotas shown)"
 else
-  bad "Argon alert missing on wide Flash: got $out_flash"
+  bad "Argon unexpectedly appeared when Flash was active: got $out_flash"
 fi
 
 echo "== 3P / Claude Model Quota Recognition =="

@@ -351,7 +351,7 @@ gemini-4-argon·medium | ctx [█░░░░░░░] 12%·125k | 🕓 3h28m |
 ### Model Quota Mapping
 
 - **Gemini 4 Argon**: displays short-term burst (`5h`) and dedicated Workload Token Units pool (`argon`).
-- **Gemini Flash / Pro**: displays short-term burst (`5h`) and standard weekly pool (`weekly`), plus an alert badge for `argon` if exhausted.
+- **Gemini Flash / Pro**: displays short-term burst (`5h`) and standard weekly pool (`weekly`).
 - **Claude / Sonnet (3P)**: displays third-party 5-hour limit (`3p-5h`) and weekly limit (`3p-7d`).
 
 ### Install for Antigravity

@@ -217,15 +217,11 @@ q_parsed=$(printf '%s' "$input" | jq -c --arg mid "$mid" '
     {
       short: get_entry("gemini-5h"; "5h"),
       long: get_entry("gemini-weekly"; "weekly"),
-      extra: (
-        if ($q["gemini-argon-wtu-weekly"] != null and $q["gemini-argon-wtu-weekly"].remaining_fraction != null and ((1 - $q["gemini-argon-wtu-weekly"].remaining_fraction) * 100) >= 85) then
-          get_entry("gemini-argon-wtu-weekly"; "argon")
-        else null end
-      )
+      extra: null
     }
   else
-    # Fallback genérico para modelos custom o nuevos
-    ($q | to_entries | map({
+    # Fallback genérico para modelos custom o nuevos (no muestra argon si el modelo no es argon)
+    ($q | to_entries | map(select((.key | contains("argon") | not) or ($mid | contains("argon")))) | map({
       label: (
         if (.key | contains("5h")) then "5h"
         elif (.key | contains("argon")) then "argon"
